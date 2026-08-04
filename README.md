@@ -1,4 +1,4 @@
-# md-html
+# Markdown HTML
 
 A **local markdown browser** for any project: declare one or more directories in
 `md-html.toml`, then open a noon-themed HTML index in the browser — file tiles,
