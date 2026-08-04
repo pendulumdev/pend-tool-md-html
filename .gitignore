@@ -1,0 +1,5 @@
+/target
+/md-html-out
+.DS_Store
+*.swp
+.env

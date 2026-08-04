@@ -1,0 +1,26 @@
+# Example `md-html.toml` — copy to a project root or run `md-html init`.
+# Paths are relative to the directory that contains this file.
+
+title = "Example"
+description = "Browsable index of project Markdown."
+port = 4173
+bind = "127.0.0.1"
+writable = false
+open_browser = true
+include_html_sites = true
+
+exclude = ["**/target/**", "**/.git/**", "**/node_modules/**"]
+
+[[roots]]
+path = "docs"
+label = "Docs"
+
+# [[roots]]
+# path = "spec"
+# label = "Spec"
+
+# Top-level markdown only (README, ROADMAP, …)
+# [[roots]]
+# path = "."
+# label = "Root"
+# recursive = false

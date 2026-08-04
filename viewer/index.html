@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <meta name="color-scheme" content="light" />
+  <title>Documents</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link
+    href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500;600;700&family=IBM+Plex+Sans:wght@400;500;600;700&display=swap"
+    rel="stylesheet"
+  />
+  <link rel="stylesheet" href="/styles.css" />
+</head>
+<body>
+  <div class="page">
+    <header class="hero">
+      <h1 id="hero-title">Documents</h1>
+      <p class="lead" id="hero-lead">Loading…</p>
+
+      <div class="toolbar">
+        <button id="refresh" class="btn ghost" hidden>Refresh</button>
+        <input id="search" class="search" placeholder="Filter files…" hidden />
+      </div>
+
+      <div id="status" class="status"><span class="dot"></span><span class="msg">Starting…</span></div>
+    </header>
+
+    <main id="main">
+      <div id="empty" class="empty">
+        <p><strong>Waiting for document index…</strong></p>
+        <p style="margin:0;">
+          Served by <code>md-html</code> from your project's <code>md-html.toml</code>.
+        </p>
+      </div>
+      <div id="list-root"></div>
+    </main>
+
+    <div class="footer">
+      <code>md-html</code> · localhost markdown browser ·
+      <a href="https://github.com/devhalls/pend-md-html">devhalls/pend-md-html</a>
+    </div>
+  </div>
+
+  <div class="modal" id="modal" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+    <div class="modal-bar">
+      <button class="btn ghost" id="back-btn" hidden title="Back to previous document">←</button>
+      <div class="title" id="modal-title">Document<span class="sub" id="modal-sub"></span></div>
+      <button class="btn" id="edit-btn" hidden>Edit</button>
+      <button class="btn primary" id="save-btn" hidden>Save</button>
+      <button class="btn ghost" id="cancel-btn" hidden>Cancel</button>
+      <button class="btn ghost" id="close-btn" title="Close (Esc)">Close</button>
+    </div>
+    <div class="modal-body" id="modal-body">
+      <article class="modal-content" id="modal-content"></article>
+      <div class="editor" id="editor">
+        <textarea id="editor-text" spellcheck="false"></textarea>
+        <div class="hint"><kbd>⌘S</kbd> / <kbd>Ctrl+S</kbd> to save · <kbd>Esc</kbd> to cancel</div>
+      </div>
+    </div>
+  </div>
+
+  <div class="toast" id="toast"></div>
+
+  <script src="/md.js"></script>
+  <script src="/app.js"></script>
+</body>
+</html>
