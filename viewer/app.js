@@ -11,6 +11,7 @@
     originalText: '',
     staticMode: false,
     staticFiles: new Map(), // key -> content
+    view: (window.MdHtmlMap && window.MdHtmlMap.getStoredView()) || 'list',
   };
   let modalDepth = 0;
   let pendingHash = null;
@@ -112,22 +113,52 @@
     });
   }
 
-  function renderList(filterText = '') {
-    const root = $('list-root');
-    root.innerHTML = '';
+  function filteredFiles(filterText = '') {
     const filter = filterText.trim().toLowerCase();
-    const visible = state.files.filter((f) =>
+    return state.files.filter((f) =>
       !filter
       || f.path.toLowerCase().includes(filter)
       || f.name.toLowerCase().includes(filter)
       || f.root.toLowerCase().includes(filter)
       || (f.summary || '').toLowerCase().includes(filter)
     );
-    if (visible.length === 0) {
-      root.innerHTML = `<div class="empty">No matching <code>.md</code> files.</div>`;
+  }
+
+  function renderIndex(filterText = '') {
+    const listRoot = $('list-root');
+    const mapRoot = $('map-root');
+    const visible = filteredFiles(filterText);
+    const sections = visible.length ? groupFiles(visible) : [];
+
+    if (state.view === 'map') {
+      listRoot.hidden = true;
+      listRoot.innerHTML = '';
+      mapRoot.hidden = false;
+      document.body.classList.add('view-map');
+      if (!window.MdHtmlMap) {
+        mapRoot.innerHTML = '<div class="empty">Map view failed to load.</div>';
+        return;
+      }
+      window.MdHtmlMap.render(mapRoot, {
+        sections,
+        projectIndex: state.projectIndex,
+        onOpen: (f) => {
+          if (f.kind === 'html') openHtmlInNewTab(f);
+          else openFile(f);
+        },
+      });
       return;
     }
-    const sections = groupFiles(visible);
+
+    document.body.classList.remove('view-map');
+    mapRoot.hidden = true;
+    if (window.MdHtmlMap) window.MdHtmlMap.clear(mapRoot);
+    listRoot.hidden = false;
+    listRoot.innerHTML = '';
+    if (visible.length === 0) {
+      listRoot.innerHTML = `<div class="empty">No matching <code>.md</code> files.</div>`;
+      return;
+    }
     for (const sec of sections) {
       const sectionEl = document.createElement('section');
       sectionEl.className = 'section';
@@ -177,8 +208,39 @@
         subWrap.appendChild(ul);
         sectionEl.appendChild(subWrap);
       }
-      root.appendChild(sectionEl);
+      listRoot.appendChild(sectionEl);
     }
+  }
+
+  function setBrowseView(view, { close = true } = {}) {
+    state.view = view === 'map' ? 'map' : 'list';
+    if (window.MdHtmlMap) window.MdHtmlMap.setStoredView(state.view);
+    document.querySelectorAll('.view-opt').forEach((btn) => {
+      const on = btn.dataset.view === state.view;
+      btn.classList.toggle('active', on);
+      btn.setAttribute('aria-checked', on ? 'true' : 'false');
+    });
+    renderIndex($('search').value);
+    if (close) closeMenu();
+  }
+
+  function openMenu() {
+    $('menu-panel').hidden = false;
+    $('menu-backdrop').hidden = false;
+    $('menu-btn').setAttribute('aria-expanded', 'true');
+    document.body.classList.add('menu-open');
+  }
+
+  function closeMenu() {
+    $('menu-panel').hidden = true;
+    $('menu-backdrop').hidden = true;
+    $('menu-btn').setAttribute('aria-expanded', 'false');
+    document.body.classList.remove('menu-open');
+  }
+
+  function toggleMenu() {
+    if ($('menu-panel').hidden) openMenu();
+    else closeMenu();
   }
 
   function openHtmlInNewTab(entry) {
@@ -428,7 +490,7 @@
     setStatus(`${parts.join(' · ')} across ${meta.roots?.length || 0} root(s)`, 'ok');
 
     setView('read');
-    renderList($('search').value);
+    setBrowseView(state.view, { close: false });
     consumePendingHash();
   }
 
@@ -445,7 +507,19 @@
   $('refresh').addEventListener('click', () => {
     loadFromApi().catch((e) => setStatus(e.message, 'bad'));
   });
-  $('search').addEventListener('input', (e) => renderList(e.target.value));
+  $('search').addEventListener('input', (e) => renderIndex(e.target.value));
+  $('menu-btn').addEventListener('click', toggleMenu);
+  $('menu-close').addEventListener('click', closeMenu);
+  $('menu-backdrop').addEventListener('click', closeMenu);
+  document.querySelectorAll('.view-opt').forEach((btn) => {
+    btn.addEventListener('click', () => setBrowseView(btn.dataset.view));
+  });
+  // Sync toggle UI to stored view before first paint of options
+  document.querySelectorAll('.view-opt').forEach((btn) => {
+    const on = btn.dataset.view === state.view;
+    btn.classList.toggle('active', on);
+    btn.setAttribute('aria-checked', on ? 'true' : 'false');
+  });
   $('close-btn').addEventListener('click', closeModal);
   $('back-btn').addEventListener('click', () => history.back());
   $('edit-btn').addEventListener('click', () => setView('edit'));
@@ -500,6 +574,11 @@
   });
 
   document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && !$('menu-panel').hidden && !$('modal').classList.contains('open')) {
+      e.preventDefault();
+      closeMenu();
+      return;
+    }
     if (!$('modal').classList.contains('open')) return;
     const editing = $('editor').classList.contains('active');
     if (e.key === 'Escape') {

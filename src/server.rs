@@ -15,6 +15,7 @@ use crate::scan::scan;
 const INDEX_HTML: &str = include_str!("../viewer/index.html");
 const STYLES_CSS: &str = include_str!("../viewer/styles.css");
 const APP_JS: &str = include_str!("../viewer/app.js");
+const MAP_JS: &str = include_str!("../viewer/map.js");
 const MD_JS: &str = include_str!("../viewer/md.js");
 
 #[derive(Serialize)]
@@ -90,6 +91,12 @@ fn dispatch(
             request,
             "application/javascript; charset=utf-8",
             APP_JS.as_bytes(),
+        )
+        .map_err(|e| e.to_string()),
+        (Method::Get, "/map.js") => respond(
+            request,
+            "application/javascript; charset=utf-8",
+            MAP_JS.as_bytes(),
         )
         .map_err(|e| e.to_string()),
         (Method::Get, "/md.js") => respond(
@@ -384,6 +391,7 @@ pub fn build(config: &Config, out_dir: &std::path::Path) -> Result<()> {
     write_out(out_dir, "data.js", data_js.as_bytes())?;
     write_out(out_dir, "styles.css", STYLES_CSS.as_bytes())?;
     write_out(out_dir, "md.js", MD_JS.as_bytes())?;
+    write_out(out_dir, "map.js", MAP_JS.as_bytes())?;
     write_out(out_dir, "app.js", APP_JS.as_bytes())?;
 
     let index = INDEX_HTML
@@ -392,6 +400,7 @@ pub fn build(config: &Config, out_dir: &std::path::Path) -> Result<()> {
             r#"<script src="data.js"></script>
   <script src="md.js"></script>"#,
         )
+        .replace(r#"src="/map.js""#, r#"src="map.js""#)
         .replace(
             r#"<script src="/app.js"></script>"#,
             r#"<script src="app.js"></script>"#,

@@ -1,11 +1,10 @@
-/* md-html markdown renderer (ported from Patch, zero npm deps) */
+/* md-html markdown renderer (zero npm deps) */
 (function (global) {
 
   // ============================================================
-  //  Tiny markdown renderer (covers what the Patch docs use:
-  //  headings, lists, tables, code, blockquotes, bold/italic,
-  //  inline code, links, hr). Loaded inline so the page is
-  //  fully self-contained with zero network dependencies.
+  //  Tiny markdown renderer: headings, lists, tables, code,
+  //  blockquotes, bold/italic, inline code, links, hr.
+  //  Self-contained — no network dependencies.
   // ============================================================
   const slugify = (s) => s
     .replace(/`([^`]+)`/g, '$1')
@@ -39,8 +38,8 @@
       s = s.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
       s = s.replace(/(^|[^*\w])\*([^*\n]+?)\*(?!\w)/g, '$1<em>$2</em>');
       // GFM intra-word rule: `_` only opens/closes emphasis when not surrounded
-      // by word characters on both sides. Without this `PATCH_FOO_BAR` becomes
-      // `PATCH<em>FOO</em>BAR`.
+      // by word characters on both sides. Without this `FOO_BAR_BAZ` becomes
+      // `FOO<em>BAR</em>BAZ`.
       s = s.replace(/(^|[^A-Za-z0-9_])_([^_\n]+?)_(?![A-Za-z0-9_])/g, '$1<em>$2</em>');
       s = s.replace(/~~([^~]+)~~/g, '<del>$1</del>');
       return s;
@@ -328,8 +327,8 @@
       if (/^#{1,6}\s/.test(trimmed)) { i++; continue; }         // heading
 
       // Markdown table: skip the block, but try to harvest a useful
-      // row first (e.g. PATCH_API spec puts its real summary in a
-      // "| Kind | … |" row of the metadata table).
+      // row first (e.g. a "| Kind | … |" or "| Description | … |"
+      // row in a metadata table).
       if (trimmed.includes('|') &&
           ((trimmed.startsWith('|')) ||
            (i + 1 < lines.length && /^\s*\|?\s*:?-{2,}/.test(lines[i + 1])))) {

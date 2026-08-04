@@ -28,6 +28,9 @@ pub struct FileEntry {
     pub dir: String,
     pub kind: FileKind,
     pub summary: String,
+    /// Project-relative `.md` targets linked from this file (map edges).
+    #[serde(default)]
+    pub links: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -185,15 +188,15 @@ fn classify(root: &ResolvedRoot, rel_str: &str, include_html: bool) -> Option<Fi
         return None;
     };
 
-    let abs = root.abs_path.join(rel_str);
-    let summary = read_summary(&abs, &kind);
-
     let path = rel_str.replace('\\', "/");
     let project_path = if root.rel_path == "." {
         path.clone()
     } else {
         format!("{}/{}", root.rel_path, path)
     };
+
+    let abs = root.abs_path.join(rel_str);
+    let (summary, links) = read_meta(&abs, &kind, &project_path);
 
     Some(FileEntry {
         root: root.label.clone(),
@@ -203,6 +206,7 @@ fn classify(root: &ResolvedRoot, rel_str: &str, include_html: bool) -> Option<Fi
         dir,
         kind,
         summary,
+        links,
     })
 }
 
@@ -213,22 +217,120 @@ fn path_to_slash(p: &Path) -> String {
         .join("/")
 }
 
-fn read_summary(path: &PathBuf, kind: &FileKind) -> String {
+fn read_meta(path: &PathBuf, kind: &FileKind, project_path: &str) -> (String, Vec<String>) {
     let Ok(file) = fs::File::open(path) else {
-        return String::new();
+        return (String::new(), Vec::new());
     };
     use std::io::Read;
-    let mut buf = vec![0u8; 6144];
+    let mut buf = vec![0u8; 12288];
     let mut handle = file;
     let n = handle.read(&mut buf).unwrap_or(0);
     let text = String::from_utf8_lossy(&buf[..n]);
     match kind {
-        FileKind::Html => extract_html_summary(&text),
-        FileKind::Md => extract_md_summary(&text),
+        FileKind::Html => (extract_html_summary(&text), Vec::new()),
+        FileKind::Md => (
+            extract_md_summary(&text),
+            extract_md_links(&text, project_path),
+        ),
     }
 }
 
-/// First useful paragraph / blockquote / metadata row (ported from Patch).
+/// Resolve markdown link targets under `from_project_path` to project-relative paths.
+/// Skips external URLs, anchors-only, and non-`.md` targets. Cap keeps the map light.
+pub fn extract_md_links(text: &str, from_project_path: &str) -> Vec<String> {
+    const MAX_LINKS: usize = 40;
+    let mut out = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    let bytes = text.as_bytes();
+    let mut i = 0usize;
+    while i < bytes.len() && out.len() < MAX_LINKS {
+        if bytes[i] != b'[' {
+            i += 1;
+            continue;
+        }
+        // Find matching ](
+        let Some(close) = text[i + 1..].find(']') else {
+            i += 1;
+            continue;
+        };
+        let after = i + 1 + close + 1;
+        if after >= bytes.len() || bytes[after] != b'(' {
+            i += 1;
+            continue;
+        }
+        let rest = &text[after + 1..];
+        let end = rest
+            .find([')', '"', '\'', ' ', '\n'])
+            .unwrap_or(rest.len());
+        let raw = rest[..end].trim();
+        i = after + 1 + end;
+        if let Some(resolved) = resolve_md_href(from_project_path, raw) {
+            if seen.insert(resolved.clone()) {
+                out.push(resolved);
+            }
+        }
+    }
+    out
+}
+
+fn resolve_md_href(from_project_path: &str, href: &str) -> Option<String> {
+    let href = href.trim();
+    if href.is_empty() {
+        return None;
+    }
+    if href.starts_with('#') {
+        return None;
+    }
+    let lower = href.to_ascii_lowercase();
+    if lower.starts_with("http://")
+        || lower.starts_with("https://")
+        || lower.starts_with("mailto:")
+        || lower.starts_with("tel:")
+        || lower.starts_with("ftp:")
+        || lower.starts_with("data:")
+        || lower.starts_with("javascript:")
+    {
+        return None;
+    }
+    let hash_at = href.find('#').unwrap_or(href.len());
+    let mut target = href[..hash_at].trim().to_string();
+    if target.is_empty() {
+        return None;
+    }
+    if !target.to_ascii_lowercase().ends_with(".md") {
+        return None;
+    }
+    if let Some(rest) = target.strip_prefix('/') {
+        target = rest.to_string();
+    } else {
+        let from_dir = match from_project_path.rfind('/') {
+            Some(i) => &from_project_path[..i],
+            None => "",
+        };
+        target = if from_dir.is_empty() {
+            target
+        } else {
+            format!("{from_dir}/{target}")
+        };
+    }
+    let mut parts = Vec::new();
+    for p in target.split('/') {
+        if p.is_empty() || p == "." {
+            continue;
+        }
+        if p == ".." {
+            parts.pop();
+            continue;
+        }
+        parts.push(p);
+    }
+    if parts.is_empty() {
+        return None;
+    }
+    Some(parts.join("/"))
+}
+
+/// First useful paragraph / blockquote / metadata row.
 pub fn extract_md_summary(text: &str) -> String {
     let normalized = text.replace("\r\n", "\n").replace('\r', "\n");
     let lines: Vec<&str> = normalized.lines().collect();
@@ -458,6 +560,21 @@ mod tests {
     fn summary_skips_h1_and_takes_paragraph() {
         let s = extract_md_summary("# Title\n\nThis is a useful summary paragraph here.\n");
         assert!(s.contains("useful summary"));
+    }
+
+    #[test]
+    fn extract_md_links_resolves_relative_and_skips_external() {
+        let text = r#"
+See [sibling](./other.md), [up](../spec/01.md#sec), [abs](/docs/a.md),
+[site](https://example.com/x.md), [img](pic.png), and [self](#anchor).
+"#;
+        let links = extract_md_links(text, "docs/guide/intro.md");
+        assert!(links.contains(&"docs/guide/other.md".into()));
+        assert!(links.contains(&"docs/spec/01.md".into()));
+        assert!(links.contains(&"docs/a.md".into()));
+        assert!(!links.iter().any(|l| l.contains("example.com")));
+        assert!(!links.iter().any(|l| l.ends_with("pic.png")));
+        assert_eq!(links.len(), 3);
     }
 
     #[test]

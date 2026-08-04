@@ -11,7 +11,7 @@ summaries, modal reader, in-doc history, and Mermaid when the CDN is reachable.
 **Status: stable for local use**
 > `md-html` is a small host tool (single Rust binary). Point it at your docs; it
 > does not depend on your project's runtime. Interfaces are intentionally small
-> and may still tighten as more Pendulum repos adopt it.
+> and may still tighten.
 
 [![Pendulum][Pendulum-shield]][Pendulum-url]
 [![Rust][Rust-shield]][Rust-url]
@@ -24,8 +24,9 @@ summaries, modal reader, in-doc history, and Mermaid when the CDN is reachable.
   title, port, and excludes. No folder-picker ritual; any project can opt in.
 - **Single binary** — `cargo install` once; consumers add config + optional Make
   target. No Node, no submodule, no generated assets in git.
-- **Browseable index** — Patch-style noon UI (IBM Plex + parchment), tile
-  summaries, filter search, full-screen modal, browser back stack.
+- **Browseable index** — noon UI (IBM Plex + parchment), tile summaries,
+  filter search, list or mind-map layout (hamburger → View), full-screen
+  modal, browser back stack.
 - **Honest links** — relative `.md` links resolve across roots via
   project-relative paths; nested `index.html` sites open in a new tab.
 - **Safe by default** — loopback bind only; edit/save is opt-in (`writable`).
@@ -40,7 +41,7 @@ summaries, modal reader, in-doc history, and Mermaid when the CDN is reachable.
 | **Project consumer** | [Getting started](#getting-started) + [`examples/md-html.toml`](examples/md-html.toml) |
 | **Tool maintainer** | [Repository layout](#repository-layout) + [Develop](#develop) |
 
-Mantra (shared with Pendulum core tools): **"keep it simple, keep it safe"**.
+Mantra: **"keep it simple, keep it safe"**.
 
 ## Repository layout
 
@@ -85,20 +86,20 @@ Nothing is committed except `md-html.toml`. No submodule, no generated assets.
 ### Config sketch
 
 ```toml
-title = "Corten"
-description = "Specs, engineering handbook, research, and review pack."
+title = "Documents"
+description = "Browsable index of project Markdown."
 port = 4173
 bind = "127.0.0.1"       # loopback only (enforced)
 writable = false         # set true to enable Edit/Save in the UI
 open_browser = true
 
 [[roots]]
-path = "spec"
-label = "Spec"
-
-[[roots]]
 path = "docs"
 label = "Docs"
+
+[[roots]]
+path = "spec"
+label = "Spec"
 
 [[roots]]
 path = "."
@@ -159,7 +160,7 @@ md-html is designed and built with contributions from:
 
 ---
 
-<!-- Badge definitions (reference-style; for-the-badge, black; aligned with Corten) -->
+<!-- Badge definitions (reference-style; for-the-badge, black) -->
 [Pendulum-shield]: https://img.shields.io/badge/pendulum-000000?style=for-the-badge&logo=data:image/svg+xml;base64,PHN2ZyBpZD0iTGF5ZXJfMSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIiB4bWxuczp4bGluaz0iaHR0cDovL3d3dy53My5vcmcvMTk5OS94bGluayIgdmlld0JveD0iMCAwIDE2NSAxNjUiPjxkZWZzPjxsaW5lYXJHcmFkaWVudCBpZD0ibGluZWFyLWdyYWRpZW50IiB4MT0iMCIgeTE9IjgzLjUiIHgyPSIxNjEuMzkiIHkyPSI4My41IiBncmFkaWVudFRyYW5zZm9ybT0idHJhbnNsYXRlKDAgMTY2KSBzY2FsZSgxIC0xKSIgZ3JhZGllbnRVbml0cz0idXNlclNwYWNlT25Vc2UiPjxzdG9wIG9mZnNldD0iMCIgc3RvcC1jb2xvcj0iIzMyYjdkNiIvPjxzdG9wIG9mZnNldD0iMSIgc3RvcC1jb2xvcj0iI2Y0OTYzYyIvPjwvbGluZWFyR3JhZGllbnQ+PC9kZWZzPjxyZWN0IHdpZHRoPSIxNjUiIGhlaWdodD0iMTY1IiBzdHlsZT0iZmlsbDp1cmwoI2xpbmVhci1ncmFkaWVudCk7Ii8+PHBhdGggZD0iTTU0LjA4LDEzM2gtMjUuOThWMzMuMDNoNDEuMzZjMTEuMjIsMCwxOS44MiwyLjkyLDI1Ljc4LDguNzVzOC45NSwxNC4wNSw4Ljk1LDI0LjY2LTIuOTgsMTguODMtOC45NSwyNC42NmMtNS45Niw1LjgzLTE0LjU2LDguNzUtMjUuNzgsOC43NWgtMTUuMzhzMCwzMy4xNSwwLDMzLjE1Wk01NC4wOCw3OC45aDguNjJjOS41NCwwLDE0LjMyLTQuMTUsMTQuMzItMTIuNDZzLTQuNzctMTIuNDYtMTQuMzItMTIuNDZoLTguNjJ2MjQuOTNoMFpNMTQzLjEsMzNsLTI2LjExLDEwMGgtMjVsMjYuMTEtMTAwaDI1WiIgc3R5bGU9ImZpbGw6I2ZmZjsiLz48L3N2Zz4=
 [Pendulum-url]: https://pendulumdev.co.uk/
 [Status-shield]: https://img.shields.io/badge/status-stable--local-000000?style=for-the-badge
