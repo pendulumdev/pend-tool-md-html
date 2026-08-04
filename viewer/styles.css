@@ -424,6 +424,26 @@
     .modal-content th { background: var(--bg-soft); }
     .modal-content hr { border: 0; border-top: 1px solid var(--border); margin: 28px 0; }
     .modal-content img { max-width: 100%; border-radius: 6px; }
+    /* CommonMark reference-style shields (shields.io / for-the-badge) */
+    .modal-content img.md-html-badge {
+      height: 28px;
+      width: auto;
+      max-width: none;
+      border-radius: 4px;
+      vertical-align: middle;
+      margin: 0;
+    }
+    .modal-content p:has(> a img.md-html-badge),
+    .modal-content p:has(> img.md-html-badge) {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 6px;
+    }
+    .modal-content a:has(> img.md-html-badge) {
+      line-height: 0;
+      text-decoration: none;
+    }
     .modal-content a.broken { color: var(--bad); text-decoration: line-through; }
     .modal-content :target,
     .modal-content .anchor-flash {

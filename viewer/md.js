@@ -3,7 +3,8 @@
 
   // ============================================================
   //  Tiny markdown renderer: headings, lists, tables, code,
-  //  blockquotes, bold/italic, inline code, links, hr.
+  //  blockquotes, bold/italic, inline code, links (inline +
+  //  CommonMark reference-style), images, hr.
   //  Self-contained — no network dependencies.
   // ============================================================
   const slugify = (s) => s
@@ -27,6 +28,93 @@
   function mdLinkExtraAttrs(url) {
     if (/^(https?:|mailto:|tel:|ftp:|data:|javascript:)/i.test(url)) return ' target="_blank" rel="noopener"';
     if (/^\/\//.test(url)) return ' target="_blank" rel="noopener"';
+    return '';
+  }
+
+  // GFM table rows: `\|` is a literal pipe (including inside code spans).
+  // A naive String#split('|') creates extra columns for command lists like
+  // `corten db migrate\|status\|reset`.
+  function splitTableRow(line) {
+    const cells = [];
+    let cur = '';
+    let i = 0;
+    const s = String(line);
+    while (i < s.length && (s[i] === ' ' || s[i] === '\t')) i++;
+    if (i < s.length && s[i] === '|') i++;
+    while (i < s.length) {
+      const ch = s[i];
+      if (ch === '\\' && i + 1 < s.length && s[i + 1] === '|') {
+        cur += '|';
+        i += 2;
+        continue;
+      }
+      if (ch === '|') {
+        cells.push(cur.trim());
+        cur = '';
+        i++;
+        continue;
+      }
+      cur += ch;
+      i++;
+    }
+    // A closing fence pipe leaves an empty trailing segment — drop it.
+    // Content after the last real cell (no fence) is kept.
+    if (cur.trim() !== '' || !/\|\s*$/.test(s)) cells.push(cur.trim());
+    return cells;
+  }
+
+  // CommonMark link reference definitions:
+  //   [label]: destination "optional title"
+  // Labels are case-insensitive; first definition wins. Used by README
+  // shield rows: [![Status][Status-shield]][Status-url]
+  const normRefLabel = (s) => String(s).replace(/\s+/g, ' ').trim().toLowerCase();
+  const LINK_REF_DEF_RE =
+    /^ {0,3}\[([^\]]+)\]:\s*<?(\S+?)>?(?:\s+(?:"([^"]*)"|'([^']*)'|\(([^)]*)\)))?\s*$/;
+
+  function isLinkRefDef(line) {
+    return LINK_REF_DEF_RE.test(line);
+  }
+
+  function extractLinkRefs(src) {
+    const refs = new Map();
+    const lines = String(src).replace(/\r\n?/g, '\n').split('\n');
+    const kept = [];
+    let fence = null;
+    for (const line of lines) {
+      const open = line.match(/^(\s*)(```|~~~)/);
+      if (!fence && open) {
+        fence = open[2];
+        kept.push(line);
+        continue;
+      }
+      if (fence) {
+        kept.push(line);
+        if (new RegExp('^\\s*' + fence.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '\\s*$').test(line)) {
+          fence = null;
+        }
+        continue;
+      }
+      const m = line.match(LINK_REF_DEF_RE);
+      if (m) {
+        const label = normRefLabel(m[1]);
+        if (label && !refs.has(label)) {
+          refs.set(label, {
+            url: m[2],
+            title: m[3] || m[4] || m[5] || '',
+          });
+        }
+        continue;
+      }
+      kept.push(line);
+    }
+    return { refs, text: kept.join('\n') };
+  }
+
+  function imgClassForUrl(url) {
+    // shields.io / for-the-badge rows should stay compact, not full-bleed photos.
+    if (/shields\.io\//i.test(url) || /[?&]style=for-the-badge\b/i.test(url)) {
+      return ' class="md-html-badge"';
+    }
     return '';
   }
 
@@ -64,81 +152,107 @@
       return body;
     };
 
-    const inline = (s) => {
-      // Mask code, images, and links to fully-formed HTML *before* running
-      // emphasis. This way intra-word underscores in URLs (and inside link
-      // text after recursion) can never be misinterpreted as italic markers.
-      const masks = [];
-      const mask = (html) => { masks.push(html); return `\u0000${masks.length - 1}\u0000`; };
-
-      s = s.replace(/`([^`]+?)`/g, (_, c) => mask(`<code>${esc(c)}</code>`));
-
-      s = s.replace(/!\[([^\]]*)\]\(([^)\s]+)(?:\s+"([^"]*)")?\)/g,
-            (_, alt, url, t) => mask(
-              `<img src="${esc(url)}" alt="${esc(alt)}"${t ? ` title="${esc(t)}"` : ''}>`
-            ));
-
-      s = s.replace(/\[([^\]]+)\]\(([^)\s]+)(?:\s+"([^"]*)")?\)/g,
-            (_, txt, url, t) => mask(
-              `<a href="${esc(url)}"${mdLinkExtraAttrs(url)}${t ? ` title="${esc(t)}"` : ''}>${labeledHtml(txt, masks)}</a>`
-            ));
-
-      s = esc(s);
-      s = emphasis(s);
-      s = s.replace(/\u0000(\d+)\u0000/g, (_, i) => masks[+i] ?? '');
-      return s;
-    };
-
-    const parseTable = (lines, i) => {
-      // detect: header | sep | rows
-      if (i + 1 >= lines.length) return null;
-      const head = lines[i], sep = lines[i + 1];
-      if (!/\|/.test(head) || !/^\s*\|?\s*:?-{2,}/.test(sep)) return null;
-      const splitRow = (r) => r.replace(/^\s*\|/, '').replace(/\|\s*$/, '').split('|').map((c) => c.trim());
-      const heads = splitRow(head);
-      const normHead = (s) => s.replace(/\*+/g, '').replace(/`/g, '').replace(/\s+/g, ' ').trim().toLowerCase();
-      const statusColIdx = heads.findIndex((h) => normHead(h) === 'status');
-      const binariesColIdx = heads.findIndex((h) => normHead(h) === 'binaries');
-      const wrapCell = (k, inner) => {
-        let out = inner;
-        if (statusColIdx >= 0 && k === statusColIdx) {
-          out = `<span class="md-html-status">${out}</span>`;
-        }
-        if (binariesColIdx >= 0 && k === binariesColIdx) {
-          out = `<span class="md-html-nowrap">${out}</span>`;
-        }
-        return out;
-      };
-      const aligns = splitRow(sep).map((c) => {
-        const l = /^:/.test(c), r = /:$/.test(c);
-        return l && r ? 'center' : r ? 'right' : l ? 'left' : '';
-      });
-      const rows = [];
-      let j = i + 2;
-      while (j < lines.length && /\|/.test(lines[j]) && lines[j].trim() !== '') {
-        rows.push(splitRow(lines[j]));
-        j++;
-      }
-      let html = '<table><thead><tr>';
-      heads.forEach((h, k) => {
-        const inner = inline(h);
-        html += `<th${aligns[k] ? ` style="text-align:${aligns[k]}"` : ''}>${wrapCell(k, inner)}</th>`;
-      });
-      html += '</tr></thead><tbody>';
-      rows.forEach((row) => {
-        html += '<tr>';
-        row.forEach((c, k) => {
-          const inner = inline(c);
-          html += `<td${aligns[k] ? ` style="text-align:${aligns[k]}"` : ''}>${wrapCell(k, inner)}</td>`;
-        });
-        html += '</tr>';
-      });
-      html += '</tbody></table>';
-      return { html, next: j };
-    };
-
     return (src) => {
-      const lines = src.replace(/\r\n?/g, '\n').split('\n');
+      const { refs, text } = extractLinkRefs(src);
+      const lookup = (label) => refs.get(normRefLabel(label));
+
+      const inline = (s) => {
+        // Mask code, images, and links to fully-formed HTML *before* running
+        // emphasis. This way intra-word underscores in URLs (and inside link
+        // text after recursion) can never be misinterpreted as italic markers.
+        const masks = [];
+        const mask = (html) => { masks.push(html); return `\u0000${masks.length - 1}\u0000`; };
+
+        const imgTag = (alt, url, title) => {
+          const t = title ? ` title="${esc(title)}"` : '';
+          return `<img${imgClassForUrl(url)} src="${esc(url)}" alt="${esc(alt)}"${t}>`;
+        };
+        const aTag = (txt, url, title) => {
+          const t = title ? ` title="${esc(title)}"` : '';
+          return `<a href="${esc(url)}"${mdLinkExtraAttrs(url)}${t}>${labeledHtml(txt, masks)}</a>`;
+        };
+
+        s = s.replace(/`([^`]+?)`/g, (_, c) => mask(`<code>${esc(c)}</code>`));
+
+        // Inline image, then reference image (![alt][label] / ![alt][])
+        s = s.replace(/!\[([^\]]*)\]\(([^)\s]+)(?:\s+"([^"]*)")?\)/g,
+              (_, alt, url, t) => mask(imgTag(alt, url, t || '')));
+        s = s.replace(/!\[([^\]]*)\]\[([^\]]*)\]/g, (full, alt, label) => {
+          const ref = lookup(label || alt);
+          return ref ? mask(imgTag(alt, ref.url, ref.title)) : full;
+        });
+
+        // Inline link, then full/collapsed reference link ([text][label] / [text][])
+        s = s.replace(/\[([^\]]+)\]\(([^)\s]+)(?:\s+"([^"]*)")?\)/g,
+              (_, txt, url, t) => mask(aTag(txt, url, t || '')));
+        s = s.replace(/\[([^\]]+)\]\[([^\]]*)\]/g, (full, txt, label) => {
+          const ref = lookup(label || txt);
+          return ref ? mask(aTag(txt, ref.url, ref.title)) : full;
+        });
+
+        // Shortcut reference [label] when defined (CommonMark); skip if followed
+        // by '(' or '[' (inline / full reference forms already handled).
+        s = s.replace(/\[([^\]]+)\](?![\(\[])/g, (full, txt) => {
+          if (txt.indexOf('\u0000') >= 0) return full;
+          const ref = lookup(txt);
+          return ref ? mask(aTag(txt, ref.url, ref.title)) : full;
+        });
+
+        s = esc(s);
+        s = emphasis(s);
+        s = s.replace(/\u0000(\d+)\u0000/g, (_, i) => masks[+i] ?? '');
+        return s;
+      };
+
+      const parseTable = (lines, i) => {
+        // detect: header | sep | rows
+        if (i + 1 >= lines.length) return null;
+        const head = lines[i], sep = lines[i + 1];
+        if (!/\|/.test(head) || !/^\s*\|?\s*:?-{2,}/.test(sep)) return null;
+        const heads = splitTableRow(head);
+        const normHead = (s) => s.replace(/\*+/g, '').replace(/`/g, '').replace(/\s+/g, ' ').trim().toLowerCase();
+        const statusColIdx = heads.findIndex((h) => normHead(h) === 'status');
+        const binariesColIdx = heads.findIndex((h) => normHead(h) === 'binaries');
+        const wrapCell = (k, inner) => {
+          let out = inner;
+          if (statusColIdx >= 0 && k === statusColIdx) {
+            out = `<span class="md-html-status">${out}</span>`;
+          }
+          if (binariesColIdx >= 0 && k === binariesColIdx) {
+            out = `<span class="md-html-nowrap">${out}</span>`;
+          }
+          return out;
+        };
+        const aligns = splitTableRow(sep).map((c) => {
+          const l = /^:/.test(c), r = /:$/.test(c);
+          return l && r ? 'center' : r ? 'right' : l ? 'left' : '';
+        });
+        const rows = [];
+        let j = i + 2;
+        while (j < lines.length && /\|/.test(lines[j]) && lines[j].trim() !== '') {
+          rows.push(splitTableRow(lines[j]));
+          j++;
+        }
+        let html = '<table><thead><tr>';
+        heads.forEach((h, k) => {
+          const inner = inline(h);
+          html += `<th${aligns[k] ? ` style="text-align:${aligns[k]}"` : ''}>${wrapCell(k, inner)}</th>`;
+        });
+        html += '</tr></thead><tbody>';
+        rows.forEach((row) => {
+          html += '<tr>';
+          // GFM: pad short rows; ignore cells beyond the header width.
+          for (let k = 0; k < heads.length; k++) {
+            const inner = inline(row[k] ?? '');
+            html += `<td${aligns[k] ? ` style="text-align:${aligns[k]}"` : ''}>${wrapCell(k, inner)}</td>`;
+          }
+          html += '</tr>';
+        });
+        html += '</tbody></table>';
+        return { html, next: j };
+      };
+
+      const lines = text.replace(/\r\n?/g, '\n').split('\n');
       let out = '';
       let i = 0;
       while (i < lines.length) {
@@ -292,7 +406,9 @@
   // ============================================================
   const cleanInline = (s) => s
     .replace(/!\[[^\]]*\]\([^)]*\)/g, '')
+    .replace(/!\[[^\]]*\]\[[^\]]*\]/g, '')
     .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
+    .replace(/\[([^\]]+)\]\[[^\]]*\]/g, '$1')
     .replace(/`([^`]+)`/g, '$1')
     .replace(/\*\*([^*]+)\*\*/g, '$1')
     .replace(/(^|[^*\w])\*([^*\n]+?)\*(?!\w)/g, '$1$2')
@@ -325,6 +441,13 @@
       if (trimmed === '') { i++; continue; }
       if (/^[-*_]{3,}\s*$/.test(trimmed)) { i++; continue; }   // hr
       if (/^#{1,6}\s/.test(trimmed)) { i++; continue; }         // heading
+      if (isLinkRefDef(line)) { i++; continue; }                 // [label]: url
+
+      // Badge / shield rows (reference-style images) — not a summary.
+      if (/^\[?!\[[^\]]+\]\[[^\]]+\]/.test(trimmed)) {
+        while (i < lines.length && lines[i].trim() !== '' && /\[?!\[[^\]]+\]\[/.test(lines[i])) i++;
+        continue;
+      }
 
       // Markdown table: skip the block, but try to harvest a useful
       // row first (e.g. a "| Kind | … |" or "| Description | … |"
@@ -332,10 +455,9 @@
       if (trimmed.includes('|') &&
           ((trimmed.startsWith('|')) ||
            (i + 1 < lines.length && /^\s*\|?\s*:?-{2,}/.test(lines[i + 1])))) {
-        const splitRow = (r) => r.replace(/^\s*\|/, '').replace(/\|\s*$/, '').split('|').map((c) => c.trim());
         let candidate = '';
         while (i < lines.length && lines[i].trim() !== '' && lines[i].includes('|')) {
-          const cells = splitRow(lines[i]);
+          const cells = splitTableRow(lines[i]);
           if (cells.length >= 2 && /^(kind|description|summary|purpose|scope|about|intent)$/i.test(cells[0])) {
             candidate = cells.slice(1).join(' — ');
           }
@@ -379,7 +501,8 @@
         && !/^#{1,6}\s/.test(lines[i])
         && !/^\s*>/.test(lines[i])
         && !/^[-*_]{3,}\s*$/.test(lines[i].trim())
-        && !lines[i].includes('|')) {
+        && !lines[i].includes('|')
+        && !isLinkRefDef(lines[i])) {
         para += ' ' + lines[i];
         i++;
       }
@@ -400,6 +523,8 @@
 
   global.slugify = slugify;
   global.mdLinkExtraAttrs = mdLinkExtraAttrs;
+  global.splitTableRow = splitTableRow;
+  global.extractLinkRefs = extractLinkRefs;
   global.md = md;
   global.cleanInline = cleanInline;
   global.extractMdSummary = extractMdSummary;

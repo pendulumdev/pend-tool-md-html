@@ -496,36 +496,66 @@ fn clean_inline(s: &str) -> String {
             break;
         }
     }
-    // [text](url) -> text
+    // [text](url) -> text (char-safe: must not walk UTF-8 bytes as chars)
     let mut result = String::new();
-    let bytes = out.as_bytes();
-    let mut i = 0;
-    while i < bytes.len() {
-        if bytes[i] == b'[' {
-            if let Some(close) = out[i + 1..].find(']') {
-                let text = &out[i + 1..i + 1 + close];
-                let after = i + 1 + close + 1;
-                if out.as_bytes().get(after) == Some(&b'(') {
-                    if let Some(end) = out[after + 1..].find(')') {
-                        result.push_str(text);
-                        i = after + 1 + end + 1;
-                        continue;
-                    }
+    let mut rest = out.as_str();
+    while let Some(open) = rest.find('[') {
+        result.push_str(&rest[..open]);
+        let after_open = &rest[open + 1..];
+        if let Some(close) = after_open.find(']') {
+            let text = &after_open[..close];
+            let after_close = &after_open[close + 1..];
+            if let Some(after_paren) = after_close.strip_prefix('(') {
+                if let Some(end) = after_paren.find(')') {
+                    result.push_str(text);
+                    rest = &after_paren[end + 1..];
+                    continue;
                 }
             }
         }
-        result.push(out.as_bytes()[i] as char);
-        i += 1;
+        result.push('[');
+        rest = after_open;
     }
+    result.push_str(rest);
     result = result.replace('`', "");
     result = result.replace("**", "");
     result = result.replace("~~", "");
     result.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
+/// Split a GFM table row on unescaped `|`. `\|` becomes a literal pipe.
 fn split_row(r: &str) -> Vec<String> {
-    let s = r.trim().trim_start_matches('|').trim_end_matches('|');
-    s.split('|').map(|c| c.trim().to_string()).collect()
+    let s = r.trim_start();
+    let mut i = if s.as_bytes().first() == Some(&b'|') {
+        1
+    } else {
+        0
+    };
+    let mut cells = Vec::new();
+    let mut cur = String::new();
+    while i < s.len() {
+        let bytes = s.as_bytes();
+        if bytes[i] == b'\\' && bytes.get(i + 1) == Some(&b'|') {
+            cur.push('|');
+            i += 2;
+            continue;
+        }
+        if bytes[i] == b'|' {
+            cells.push(cur.trim().to_string());
+            cur.clear();
+            i += 1;
+            continue;
+        }
+        let Some(ch) = s[i..].chars().next() else {
+            break;
+        };
+        cur.push(ch);
+        i += ch.len_utf8();
+    }
+    if !cur.trim().is_empty() || !s.trim_end().ends_with('|') {
+        cells.push(cur.trim().to_string());
+    }
+    cells
 }
 
 fn looks_like_table_sep(line: &str) -> bool {
@@ -560,6 +590,30 @@ mod tests {
     fn summary_skips_h1_and_takes_paragraph() {
         let s = extract_md_summary("# Title\n\nThis is a useful summary paragraph here.\n");
         assert!(s.contains("useful summary"));
+    }
+
+    #[test]
+    fn summary_preserves_unicode_dashes_and_arrows() {
+        let s = extract_md_summary(
+            "# 13 — Migrations\n\n## Purpose\n\nDefine migration with a high success rate — minimal data loss, staging → store.\n",
+        );
+        assert!(
+            s.contains('—'),
+            "em dash must survive clean_inline, got: {s:?}"
+        );
+        assert!(s.contains('→'), "arrow must survive clean_inline, got: {s:?}");
+        assert!(!s.contains('â'), "must not mojibake UTF-8, got: {s:?}");
+    }
+
+    #[test]
+    fn split_row_respects_escaped_pipes() {
+        let cells = split_row(
+            "| database | `corten db migrate\\|status\\|reset` | wraps runner |",
+        );
+        assert_eq!(cells.len(), 3, "cells={cells:?}");
+        assert_eq!(cells[0], "database");
+        assert_eq!(cells[1], "`corten db migrate|status|reset`");
+        assert_eq!(cells[2], "wraps runner");
     }
 
     #[test]
