@@ -76,7 +76,8 @@
   }
 
   function groupFiles(files) {
-    // Group by root label, then by dir subgroups
+    // Group by root label, then by dir subgroups. Root sections follow
+    // [[roots]] order from config (meta.roots), not alphabetical.
     const sections = new Map();
     for (const f of files) {
       const top = f.root;
@@ -86,7 +87,14 @@
       if (!subgroups.has(sub)) subgroups.set(sub, []);
       subgroups.get(sub).push(f);
     }
-    const orderedTop = [...sections.keys()].sort((a, b) => a.localeCompare(b));
+    const configured = (state.meta && state.meta.roots) || [];
+    const orderedTop = [];
+    for (const r of configured) {
+      if (sections.has(r.label)) orderedTop.push(r.label);
+    }
+    for (const key of sections.keys()) {
+      if (!orderedTop.includes(key)) orderedTop.push(key);
+    }
     return orderedTop.map((top) => {
       const subs = sections.get(top);
       const orderedSubs = [...subs.keys()].sort((a, b) => {

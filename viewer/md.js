@@ -33,6 +33,38 @@
 
   const md = (() => {
     const esc = (s) => s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+    // Emphasis / strike on already-escaped text (no raw <>& left).
+    const emphasis = (s) => {
+      s = s.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
+      s = s.replace(/(^|[^*\w])\*([^*\n]+?)\*(?!\w)/g, '$1<em>$2</em>');
+      // GFM intra-word rule: `_` only opens/closes emphasis when not surrounded
+      // by word characters on both sides. Without this `PATCH_FOO_BAR` becomes
+      // `PATCH<em>FOO</em>BAR`.
+      s = s.replace(/(^|[^A-Za-z0-9_])_([^_\n]+?)_(?![A-Za-z0-9_])/g, '$1<em>$2</em>');
+      s = s.replace(/~~([^~]+)~~/g, '<del>$1</del>');
+      return s;
+    };
+
+    // Link/image labels may already contain \0N\0 masks (e.g. [`path`](url)).
+    // Expanding those into HTML and then calling inline() would esc() the tags
+    // or, worse, recurse with a fresh empty mask table and print "undefined".
+    // Instead: expand masks, protect HTML, esc+emphasis on text, restore HTML.
+    const labeledHtml = (txt, masks) => {
+      const expanded = String(txt).replace(/\u0000(\d+)\u0000/g, (_, i) => {
+        const html = masks[+i];
+        return html === undefined ? '' : html;
+      });
+      const htmlBits = [];
+      const protectedText = expanded.replace(/<[^>]+>/g, (tag) => {
+        htmlBits.push(tag);
+        return `\u0001${htmlBits.length - 1}\u0001`;
+      });
+      let body = emphasis(esc(protectedText));
+      body = body.replace(/\u0001(\d+)\u0001/g, (_, i) => htmlBits[+i] ?? '');
+      return body;
+    };
+
     const inline = (s) => {
       // Mask code, images, and links to fully-formed HTML *before* running
       // emphasis. This way intra-word underscores in URLs (and inside link
@@ -49,20 +81,12 @@
 
       s = s.replace(/\[([^\]]+)\]\(([^)\s]+)(?:\s+"([^"]*)")?\)/g,
             (_, txt, url, t) => mask(
-              `<a href="${esc(url)}"${mdLinkExtraAttrs(url)}${t ? ` title="${esc(t)}"` : ''}>${inline(txt)}</a>`
+              `<a href="${esc(url)}"${mdLinkExtraAttrs(url)}${t ? ` title="${esc(t)}"` : ''}>${labeledHtml(txt, masks)}</a>`
             ));
 
       s = esc(s);
-
-      s = s.replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>');
-      s = s.replace(/(^|[^*\w])\*([^*\n]+?)\*(?!\w)/g, '$1<em>$2</em>');
-      // GFM intra-word rule: `_` only opens/closes emphasis when not surrounded
-      // by word characters on both sides. Without this `PATCH_FOO_BAR` becomes
-      // `PATCH<em>FOO</em>BAR`.
-      s = s.replace(/(^|[^A-Za-z0-9_])_([^_\n]+?)_(?![A-Za-z0-9_])/g, '$1<em>$2</em>');
-      s = s.replace(/~~([^~]+)~~/g, '<del>$1</del>');
-
-      s = s.replace(/\u0000(\d+)\u0000/g, (_, i) => masks[+i]);
+      s = emphasis(s);
+      s = s.replace(/\u0000(\d+)\u0000/g, (_, i) => masks[+i] ?? '');
       return s;
     };
 

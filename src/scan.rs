@@ -43,9 +43,17 @@ pub fn scan(config: &Config) -> Result<TreeResponse> {
         scan_root(root, config.include_html_sites, &exclude, &mut files)?;
     }
 
+    // Preserve [[roots]] declaration order; sort within each root by dir/name.
+    let root_order: std::collections::HashMap<&str, usize> = config
+        .roots
+        .iter()
+        .enumerate()
+        .map(|(i, r)| (r.label.as_str(), i))
+        .collect();
     files.sort_by(|a, b| {
-        a.root
-            .cmp(&b.root)
+        let ai = root_order.get(a.root.as_str()).copied().unwrap_or(usize::MAX);
+        let bi = root_order.get(b.root.as_str()).copied().unwrap_or(usize::MAX);
+        ai.cmp(&bi)
             .then(a.dir.cmp(&b.dir))
             .then(a.name.cmp(&b.name))
     });
@@ -450,6 +458,55 @@ mod tests {
     fn summary_skips_h1_and_takes_paragraph() {
         let s = extract_md_summary("# Title\n\nThis is a useful summary paragraph here.\n");
         assert!(s.contains("useful summary"));
+    }
+
+    #[test]
+    fn scan_preserves_root_declaration_order() {
+        let dir = tempdir().unwrap();
+        fs::create_dir_all(dir.path().join("zebra")).unwrap();
+        fs::create_dir_all(dir.path().join("alpha")).unwrap();
+        fs::write(
+            dir.path().join("zebra/z.md"),
+            "# Z\n\nZebra summary text ok.\n",
+        )
+        .unwrap();
+        fs::write(
+            dir.path().join("alpha/a.md"),
+            "# A\n\nAlpha summary text ok.\n",
+        )
+        .unwrap();
+
+        let cfg = Config::from_file(
+            ConfigFile {
+                title: "T".into(),
+                description: "D".into(),
+                port: 4173,
+                bind: "127.0.0.1".into(),
+                writable: false,
+                open_browser: false,
+                roots: vec![
+                    RootConfig {
+                        path: "zebra".into(),
+                        label: "Zebra".into(),
+                        recursive: true,
+                    },
+                    RootConfig {
+                        path: "alpha".into(),
+                        label: "Alpha".into(),
+                        recursive: true,
+                    },
+                ],
+                exclude: default_exclude(),
+                include_html_sites: false,
+            },
+            dir.path(),
+        )
+        .unwrap();
+
+        let tree = scan(&cfg).unwrap();
+        assert_eq!(tree.files.len(), 2);
+        assert_eq!(tree.files[0].root, "Zebra");
+        assert_eq!(tree.files[1].root, "Alpha");
     }
 
     #[test]
