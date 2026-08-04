@@ -1,37 +1,84 @@
-# pend-md-html (`md-html`)
+# md-html
 
-Small, local markdown browser for any project. Point it at one or more directories via
+A **local markdown browser** for any project: declare one or more directories in
 `md-html.toml`, then open a noon-themed HTML index in the browser — file tiles,
 summaries, modal reader, in-doc history, and Mermaid when the CDN is reachable.
 
-Visual and markdown rendering are ported from the Patch documents viewer; the
-deployment model is project-local config + a single Rust binary (no Node, no
-folder picker).
+[![Status][Status-shield]][Status-url]
+[![Docs][Docs-shield]][Docs-url]
+[![License][License-shield]][License-url]
 
-## Install
+**Status: stable for local use**
+> `md-html` is a small host tool (single Rust binary). Point it at your docs; it
+> does not depend on your project's runtime. Interfaces are intentionally small
+> and may still tighten as more Pendulum repos adopt it.
 
-```bash
-cargo install --git https://github.com/devhalls/pend-md-html --locked
+[![Pendulum][Pendulum-shield]][Pendulum-url]
+[![Rust][Rust-shield]][Rust-url]
+
+---
+
+## What md-html is
+
+- **Project-local config** — one `md-html.toml` lists roots (e.g. `spec/`, `docs/`),
+  title, port, and excludes. No folder-picker ritual; any project can opt in.
+- **Single binary** — `cargo install` once; consumers add config + optional Make
+  target. No Node, no submodule, no generated assets in git.
+- **Browseable index** — Patch-style noon UI (IBM Plex + parchment), tile
+  summaries, filter search, full-screen modal, browser back stack.
+- **Honest links** — relative `.md` links resolve across roots via
+  project-relative paths; nested `index.html` sites open in a new tab.
+- **Safe by default** — loopback bind only; edit/save is opt-in (`writable`).
+- **Mermaid when available** — fenced diagrams lazy-load from CDN; offline
+  falls back to source.
+
+## Documentation
+
+| I am a… | Start at |
+|---------|----------|
+| Curious reader | this file |
+| **Project consumer** | [Getting started](#getting-started) + [`examples/md-html.toml`](examples/md-html.toml) |
+| **Tool maintainer** | [Repository layout](#repository-layout) + [Develop](#develop) |
+
+Mantra (shared with Pendulum core tools): **"keep it simple, keep it safe"**.
+
+## Repository layout
+
+```
+src/        # Rust CLI: config, scan, localhost server
+viewer/     # Embedded HTML / CSS / JS (noon theme + MD renderer)
+examples/   # Annotated md-html.toml
 ```
 
-Requires a Rust toolchain. The binary is named `md-html`.
+## Getting started
 
-## Use in a project
+Install once (Rust toolchain required):
 
-1. From the project root:
+```bash
+cargo install --git https://github.com/pendulumdev/md-html --locked
+```
 
-   ```bash
-   md-html init          # writes md-html.toml (refuses to overwrite)
-   # edit roots / title / description
-   md-html serve         # http://127.0.0.1:4173/  (opens browser by default)
-   ```
+The binary is named `md-html`.
 
-2. Or add a Make target:
+**Supported environments:** macOS 13+ (Apple Silicon & Intel) is the primary
+target. Linux is best-effort. On Windows, use WSL2.
 
-   ```makefile
-   docs-view: ## Browse markdown docs in the browser (requires md-html)
-   	md-html serve
-   ```
+### Use in a project
+
+From the project root:
+
+```bash
+md-html init          # writes md-html.toml (refuses to overwrite)
+# edit roots / title / description
+md-html serve         # http://127.0.0.1:4173/  (opens browser by default)
+```
+
+Or add a Make target:
+
+```makefile
+docs-view: ## Browse markdown docs in the browser (requires md-html)
+	md-html serve
+```
 
 Nothing is committed except `md-html.toml`. No submodule, no generated assets.
 
@@ -74,16 +121,6 @@ See [`examples/md-html.toml`](examples/md-html.toml).
 
 Flags: `--config PATH`, `--port N`, `--bind ADDR`, `--no-open`, `build --out DIR`.
 
-## Features
-
-- Multi-root scan with labels, excludes, and optional non-recursive roots
-- Patch-style noon UI (IBM Plex + parchment), tile summaries, filter search
-- Full-screen modal, browser back stack, `#RootLabel/path.md:anchor` deep links
-- Relative `.md` links resolve across roots via project-relative paths
-- Nested `index.html` listed as **site ↗** (serve mode)
-- Optional edit/save when `writable = true` (still localhost-only)
-- Mermaid fences: lazy-load from jsDelivr; offline fallback shows source
-
 ## Smoke checklist
 
 After `md-html serve` in a configured repo:
@@ -100,9 +137,36 @@ After `md-html serve` in a configured repo:
 cargo fmt
 cargo clippy --all-targets -- -D warnings
 cargo test
-cargo run -- serve --config examples/md-html.toml --no-open   # needs real roots
+cargo run -- serve --config path/to/md-html.toml --no-open
 ```
+
+## Contributing
+
+Open issues and pull requests against
+[`pendulumdev/md-html`](https://github.com/pendulumdev/md-html). Prefer small,
+single-purpose changes; keep the dependency surface tiny.
+
+## Contributors
+
+md-html is designed and built with contributions from:
+
+- **[Pendulum](https://pendulumdev.co.uk)** — lead development and maintenance.
+- **[Devhalls](https://github.com/devhalls)** — primary author.
 
 ## License
 
-MIT — see [LICENSE](LICENSE).
+**MIT** — full text in [`LICENSE`](LICENSE).
+
+---
+
+<!-- Badge definitions (reference-style; for-the-badge, black; aligned with Corten) -->
+[Pendulum-shield]: https://img.shields.io/badge/pendulum-000000?style=for-the-badge&logo=data:image/svg+xml;base64,PHN2ZyBpZD0iTGF5ZXJfMSIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIiB4bWxuczp4bGluaz0iaHR0cDovL3d3dy53My5vcmcvMTk5OS94bGluayIgdmlld0JveD0iMCAwIDE2NSAxNjUiPjxkZWZzPjxsaW5lYXJHcmFkaWVudCBpZD0ibGluZWFyLWdyYWRpZW50IiB4MT0iMCIgeTE9IjgzLjUiIHgyPSIxNjEuMzkiIHkyPSI4My41IiBncmFkaWVudFRyYW5zZm9ybT0idHJhbnNsYXRlKDAgMTY2KSBzY2FsZSgxIC0xKSIgZ3JhZGllbnRVbml0cz0idXNlclNwYWNlT25Vc2UiPjxzdG9wIG9mZnNldD0iMCIgc3RvcC1jb2xvcj0iIzMyYjdkNiIvPjxzdG9wIG9mZnNldD0iMSIgc3RvcC1jb2xvcj0iI2Y0OTYzYyIvPjwvbGluZWFyR3JhZGllbnQ+PC9kZWZzPjxyZWN0IHdpZHRoPSIxNjUiIGhlaWdodD0iMTY1IiBzdHlsZT0iZmlsbDp1cmwoI2xpbmVhci1ncmFkaWVudCk7Ii8+PHBhdGggZD0iTTU0LjA4LDEzM2gtMjUuOThWMzMuMDNoNDEuMzZjMTEuMjIsMCwxOS44MiwyLjkyLDI1Ljc4LDguNzVzOC45NSwxNC4wNSw4Ljk1LDI0LjY2LTIuOTgsMTguODMtOC45NSwyNC42NmMtNS45Niw1LjgzLTE0LjU2LDguNzUtMjUuNzgsOC43NWgtMTUuMzhzMCwzMy4xNSwwLDMzLjE1Wk01NC4wOCw3OC45aDguNjJjOS41NCwwLDE0LjMyLTQuMTUsMTQuMzItMTIuNDZzLTQuNzctMTIuNDYtMTQuMzItMTIuNDZoLTguNjJ2MjQuOTNoMFpNMTQzLjEsMzNsLTI2LjExLDEwMGgtMjVsMjYuMTEtMTAwaDI1WiIgc3R5bGU9ImZpbGw6I2ZmZjsiLz48L3N2Zz4=
+[Pendulum-url]: https://pendulumdev.co.uk/
+[Status-shield]: https://img.shields.io/badge/status-stable--local-000000?style=for-the-badge
+[Status-url]: README.md
+[Rust-shield]: https://img.shields.io/badge/rust-000000?style=for-the-badge&logo=rust
+[Rust-url]: https://www.rust-lang.org/
+[Docs-shield]: https://img.shields.io/badge/docs-000000?style=for-the-badge&logo=readthedocs
+[Docs-url]: README.md
+[License-shield]: https://img.shields.io/badge/license-MIT-000000?style=for-the-badge&logo=data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHZpZXdCb3g9IjAgMCAzMiAzMiI+PHBhdGggZmlsbD0id2hpdGUiIGQ9Ik0xNiAybDEyIDQuNXY5YzAgOC4yLTUuMSAxNC4xLTEyIDE2LjhDOS4xIDI5LjYgNCAyMy43IDQgMTUuNXYtOUwxNiAyeiIvPjwvc3ZnPg==
+[License-url]: LICENSE
