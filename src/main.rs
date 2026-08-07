@@ -1,4 +1,4 @@
-//! `md-html` — browse project markdown via a local HTML viewer.
+//! `md-html` - browse project markdown via a local HTML viewer.
 //!
 //! See the repository README and `examples/md-html.toml`.
 

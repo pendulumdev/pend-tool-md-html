@@ -1,4 +1,4 @@
-/* md-html viewer app — API-driven (serve) or static data.js (build) */
+/* md-html viewer app - API-driven (serve) or static data.js (build) */
 (function () {
   const $ = (id) => document.getElementById(id);
 
@@ -255,7 +255,7 @@
     }
     const url = `/files/${encodeURIComponent(entry.root)}/${entry.path.split('/').map(encodeURIComponent).join('/')}`;
     const win = window.open(url, '_blank', 'noopener');
-    if (!win) toast('Pop-up blocked — allow pop-ups for this page', 'bad');
+    if (!win) toast('Pop-up blocked - allow pop-ups for this page', 'bad');
   }
 
   async function readFile(entry) {
@@ -513,7 +513,7 @@
       state.revision = next;
       await applyLiveReload();
     } catch (_) {
-      // offline / server restarting — keep polling
+      // offline / server restarting - keep polling
     } finally {
       liveReloadInFlight = false;
     }
@@ -564,7 +564,7 @@
       files.map((f) => [(f.project_path || f.path).toLowerCase(), f])
     );
 
-    document.title = meta.title + ' — Documents';
+    document.title = meta.title + ' - Documents';
     $('hero-title').textContent = meta.title;
     $('hero-lead').textContent = meta.description;
 

@@ -1,4 +1,4 @@
-/* md-html mind-map — column/row layout, no overlaps, hover focus */
+/* md-html mind-map - column/row layout, no overlaps, hover focus */
 (function () {
   const VIEW_KEY = 'md-html-view';
 
@@ -31,7 +31,7 @@
       .replace(/"/g, '&quot;');
   }
 
-  /** Soft cubic with a light bow — still readable between grid anchors. */
+  /** Soft cubic with a light bow - still readable between grid anchors. */
   function curvePath(x1, y1, x2, y2, seed) {
     const dx = x2 - x1;
     const dy = y2 - y1;

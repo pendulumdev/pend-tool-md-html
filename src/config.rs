@@ -247,7 +247,7 @@ fn normalize_file_rel(raw: &str) -> Result<String> {
 }
 
 pub fn default_init_toml() -> &'static str {
-    r#"# md-html — local markdown browser
+    r#"# md-html - local markdown browser
 # https://github.com/pendulumdev/md-html
 
 title = "Documents"

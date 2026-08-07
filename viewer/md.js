@@ -5,7 +5,7 @@
   //  Tiny markdown renderer: headings, lists, tables, code,
   //  blockquotes, bold/italic, inline code, links (inline +
   //  CommonMark reference-style), images, hr.
-  //  Self-contained — no network dependencies.
+  //  Self-contained - no network dependencies.
   // ============================================================
   const slugify = (s) => s
     .replace(/`([^`]+)`/g, '$1')
@@ -57,7 +57,7 @@
       cur += ch;
       i++;
     }
-    // A closing fence pipe leaves an empty trailing segment — drop it.
+    // A closing fence pipe leaves an empty trailing segment - drop it.
     // Content after the last real cell (no fence) is kept.
     if (cur.trim() !== '' || !/\|\s*$/.test(s)) cells.push(cur.trim());
     return cells;
@@ -443,7 +443,7 @@
       if (/^#{1,6}\s/.test(trimmed)) { i++; continue; }         // heading
       if (isLinkRefDef(line)) { i++; continue; }                 // [label]: url
 
-      // Badge / shield rows (reference-style images) — not a summary.
+      // Badge / shield rows (reference-style images) - not a summary.
       if (/^\[?!\[[^\]]+\]\[[^\]]+\]/.test(trimmed)) {
         while (i < lines.length && lines[i].trim() !== '' && /\[?!\[[^\]]+\]\[/.test(lines[i])) i++;
         continue;
@@ -459,7 +459,7 @@
         while (i < lines.length && lines[i].trim() !== '' && lines[i].includes('|')) {
           const cells = splitTableRow(lines[i]);
           if (cells.length >= 2 && /^(kind|description|summary|purpose|scope|about|intent)$/i.test(cells[0])) {
-            candidate = cells.slice(1).join(' — ');
+            candidate = cells.slice(1).join(' - ');
           }
           i++;
         }
@@ -470,7 +470,7 @@
         continue;
       }
 
-      // Skip list blocks (bullets and numbered) — they're rarely a
+      // Skip list blocks (bullets and numbered) - they're rarely a
       // good description, and "Related documents" lists in particular
       // show up before the meaty content in many spec files.
       if (/^\s*([-*+]|\d+\.)\s+/.test(line)) {
@@ -490,7 +490,7 @@
         continue;
       }
 
-      // Bold-label intro like "**Related documents**" — skip and keep looking.
+      // Bold-label intro like "**Related documents**" - skip and keep looking.
       if (/^\*\*[^*]+\*\*\s*:?\s*$/.test(trimmed)) { i++; continue; }
 
       // Plain paragraph: collect contiguous non-block lines

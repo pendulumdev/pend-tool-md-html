@@ -515,7 +515,7 @@ pub fn extract_md_summary(text: &str) -> String {
                             | "intent"
                     )
                 {
-                    candidate = cells[1..].join(" — ");
+                    candidate = cells[1..].join(" - ");
                 }
                 i += 1;
             }
@@ -588,7 +588,7 @@ fn extract_html_summary(text: &str) -> String {
             }
         }
     }
-    // meta description — simple scan
+    // meta description - simple scan
     for part in text.split('<') {
         let lower = part.to_ascii_lowercase();
         if lower.starts_with("meta") && lower.contains("name=\"description\"")

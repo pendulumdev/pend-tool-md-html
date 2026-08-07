@@ -40,7 +40,7 @@
       --ok: #2d6a4f;            /* deeper sage */
       --bad: #c1440e;           /* clay */
 
-      /* Links — distinct from body text; hover deepens toward forest */
+      /* Links - distinct from body text; hover deepens toward forest */
       --link: #1e6b52;
       --link-hover: #134c3a;
 
@@ -51,7 +51,7 @@
       --mono: "IBM Plex Mono", ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, "Liberation Mono", monospace;
       --sans: "IBM Plex Sans", -apple-system, BlinkMacSystemFont, "Segoe UI", system-ui, sans-serif;
 
-      /* Content column — hero/footer align; section bands break out full-bleed. */
+      /* Content column - hero/footer align; section bands break out full-bleed. */
       --page-max: 920px;
       --page-pad: 28px;
     }
@@ -83,7 +83,7 @@
       padding-right: var(--page-pad);
     }
 
-    /* Hero is band B; list sections then A / B / A… — only two colours. */
+    /* Hero is band B; list sections then A / B / A… - only two colours. */
     header.hero {
       margin: 0;
       background: var(--section-band-b);
