@@ -1,7 +1,10 @@
 //! Walk configured roots and collect markdown / nested HTML site entries.
 
+use std::collections::hash_map::DefaultHasher;
 use std::fs;
+use std::hash::{Hash, Hasher};
 use std::path::{Path, PathBuf};
+use std::time::UNIX_EPOCH;
 
 use globset::{Glob, GlobSet, GlobSetBuilder};
 use serde::Serialize;
@@ -38,6 +41,13 @@ pub struct TreeResponse {
     pub files: Vec<FileEntry>,
 }
 
+/// Cheap fingerprint of indexed docs (paths + mtimes + sizes). Used by the
+/// viewer to poll for live reload without re-reading file bodies.
+#[derive(Debug, Clone, Serialize)]
+pub struct RevisionResponse {
+    pub revision: String,
+}
+
 pub fn scan(config: &Config) -> Result<TreeResponse> {
     let exclude = build_exclude_set(&config.exclude)?;
     let mut files = Vec::new();
@@ -62,6 +72,104 @@ pub fn scan(config: &Config) -> Result<TreeResponse> {
     });
 
     Ok(TreeResponse { files })
+}
+
+pub fn revision(config: &Config) -> Result<RevisionResponse> {
+    let exclude = build_exclude_set(&config.exclude)?;
+    let mut hasher = DefaultHasher::new();
+    let mut count = 0u64;
+
+    for root in &config.roots {
+        for_each_indexed_path(root, config.include_html_sites, &exclude, |abs, label, rel| {
+            label.hash(&mut hasher);
+            rel.hash(&mut hasher);
+            if let Ok(meta) = fs::metadata(abs) {
+                meta.len().hash(&mut hasher);
+                if let Ok(modified) = meta.modified() {
+                    if let Ok(dur) = modified.duration_since(UNIX_EPOCH) {
+                        dur.as_millis().hash(&mut hasher);
+                    }
+                }
+            }
+            count += 1;
+            Ok(())
+        })?;
+    }
+    count.hash(&mut hasher);
+
+    Ok(RevisionResponse {
+        revision: format!("{:016x}", hasher.finish()),
+    })
+}
+
+fn for_each_indexed_path(
+    root: &ResolvedRoot,
+    include_html: bool,
+    exclude: &GlobSet,
+    mut visit: impl FnMut(&Path, &str, &str) -> Result<()>,
+) -> Result<()> {
+    if !root.recursive {
+        let rd = fs::read_dir(&root.abs_path).map_err(|source| MdHtmlError::Io {
+            path: root.abs_path.clone(),
+            source,
+        })?;
+        for ent in rd {
+            let ent = ent.map_err(|source| MdHtmlError::Io {
+                path: root.abs_path.clone(),
+                source,
+            })?;
+            let name = ent.file_name();
+            let name = name.to_string_lossy();
+            if name.starts_with('.') {
+                continue;
+            }
+            let path = ent.path();
+            if !path.is_file() {
+                continue;
+            }
+            let rel_str = name.to_string();
+            if is_excluded(exclude, &root.rel_path, &rel_str) {
+                continue;
+            }
+            if classify_kind(&rel_str, include_html).is_none() {
+                continue;
+            }
+            visit(&path, &root.label, &rel_str)?;
+        }
+        return Ok(());
+    }
+
+    let walker = WalkDir::new(&root.abs_path)
+        .follow_links(false)
+        .into_iter()
+        .filter_entry(|e| {
+            let name = e.file_name().to_string_lossy();
+            !name.starts_with('.')
+        });
+
+    for entry in walker {
+        let entry = entry.map_err(|e| MdHtmlError::Server(e.to_string()))?;
+        if !entry.file_type().is_file() {
+            continue;
+        }
+        let abs = entry.path();
+        let rel = match abs.strip_prefix(&root.abs_path) {
+            Ok(r) => r,
+            Err(_) => continue,
+        };
+        let rel_str = path_to_slash(rel);
+        if rel_str.is_empty() {
+            continue;
+        }
+        if is_excluded(exclude, &root.rel_path, &rel_str) {
+            continue;
+        }
+        if classify_kind(&rel_str, include_html).is_none() {
+            continue;
+        }
+        visit(abs, &root.label, &rel_str)?;
+    }
+    Ok(())
 }
 
 fn build_exclude_set(patterns: &[String]) -> Result<GlobSet> {
@@ -168,7 +276,29 @@ fn is_excluded(exclude: &GlobSet, root_rel: &str, file_rel: &str) -> bool {
     exclude.is_match(&project_rel) || exclude.is_match(file_rel)
 }
 
+fn classify_kind(rel_str: &str, include_html: bool) -> Option<FileKind> {
+    let path = Path::new(rel_str);
+    let name = path.file_name()?.to_string_lossy();
+    let dir = path
+        .parent()
+        .map(path_to_slash)
+        .filter(|s| !s.is_empty())
+        .unwrap_or_else(|| "(root)".into());
+
+    if name.eq_ignore_ascii_case("index.html") {
+        if !include_html || dir == "(root)" {
+            return None;
+        }
+        Some(FileKind::Html)
+    } else if name.to_ascii_lowercase().ends_with(".md") {
+        Some(FileKind::Md)
+    } else {
+        None
+    }
+}
+
 fn classify(root: &ResolvedRoot, rel_str: &str, include_html: bool) -> Option<FileEntry> {
+    let kind = classify_kind(rel_str, include_html)?;
     let path = Path::new(rel_str);
     let name = path.file_name()?.to_string_lossy().to_string();
     let dir = path
@@ -176,17 +306,6 @@ fn classify(root: &ResolvedRoot, rel_str: &str, include_html: bool) -> Option<Fi
         .map(path_to_slash)
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| "(root)".into());
-
-    let kind = if name.eq_ignore_ascii_case("index.html") {
-        if !include_html || dir == "(root)" {
-            return None;
-        }
-        FileKind::Html
-    } else if name.to_ascii_lowercase().ends_with(".md") {
-        FileKind::Md
-    } else {
-        return None;
-    };
 
     let path = rel_str.replace('\\', "/");
     let project_path = if root.rel_path == "." {
@@ -590,6 +709,41 @@ mod tests {
     fn summary_skips_h1_and_takes_paragraph() {
         let s = extract_md_summary("# Title\n\nThis is a useful summary paragraph here.\n");
         assert!(s.contains("useful summary"));
+    }
+
+    #[test]
+    fn revision_changes_when_file_contents_touch_mtime() {
+        let dir = tempdir().unwrap();
+        let docs = dir.path().join("docs");
+        fs::create_dir_all(&docs).unwrap();
+        let md = docs.join("a.md");
+        fs::write(&md, "# A\n\nFirst summary text here.\n").unwrap();
+
+        let cfg = Config::from_file(
+            ConfigFile {
+                title: "T".into(),
+                description: "D".into(),
+                port: 4173,
+                bind: "127.0.0.1".into(),
+                writable: false,
+                open_browser: false,
+                roots: vec![RootConfig {
+                    path: "docs".into(),
+                    label: "Docs".into(),
+                    recursive: true,
+                }],
+                exclude: default_exclude(),
+                include_html_sites: false,
+            },
+            dir.path(),
+        )
+        .unwrap();
+
+        let r1 = revision(&cfg).unwrap().revision;
+        // Length change alone must bust the fingerprint (mtime can be coarse).
+        fs::write(&md, "# A\n\nSecond summary text here — longer.\n").unwrap();
+        let r2 = revision(&cfg).unwrap().revision;
+        assert_ne!(r1, r2, "revision should change after edit");
     }
 
     #[test]

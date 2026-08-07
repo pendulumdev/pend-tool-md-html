@@ -12,9 +12,14 @@
     staticMode: false,
     staticFiles: new Map(), // key -> content
     view: (window.MdHtmlMap && window.MdHtmlMap.getStoredView()) || 'list',
+    revision: null,
   };
   let modalDepth = 0;
   let pendingHash = null;
+  let liveReloadTimer = null;
+  let liveReloadInFlight = false;
+  // Poll indexed docs via /api/revision; also check when the tab is shown again.
+  const LIVE_RELOAD_MS = 2000;
 
   const fileKey = (root, path) => `${root}\0${path}`.toLowerCase();
 
@@ -444,16 +449,24 @@
     setView('read');
   }
 
-  async function loadFromApi() {
-    setStatus('Loading…');
-    const [metaRes, treeRes] = await Promise.all([
+  async function loadFromApi({ quiet = false, preserveEditor = false } = {}) {
+    if (!quiet) setStatus('Loading…');
+    const [metaRes, treeRes, revRes] = await Promise.all([
       fetch('/api/meta'),
       fetch('/api/tree'),
+      fetch('/api/revision'),
     ]);
     if (!metaRes.ok || !treeRes.ok) throw new Error('Failed to load document index');
     state.meta = await metaRes.json();
     const tree = await treeRes.json();
-    applyMetaAndTree(state.meta, tree.files || []);
+    if (revRes.ok) {
+      try {
+        const rev = await revRes.json();
+        if (rev && rev.revision) state.revision = rev.revision;
+      } catch (_) {}
+    }
+    applyMetaAndTree(state.meta, tree.files || [], { preserveEditor });
+    startLiveReload();
   }
 
   function loadFromStatic() {
@@ -465,9 +478,85 @@
       state.staticFiles.set(fileKey(f.root, f.path), f.content);
     }
     applyMetaAndTree(data.meta, (data.tree && data.tree.files) || []);
+    stopLiveReload();
   }
 
-  function applyMetaAndTree(meta, files) {
+  function stopLiveReload() {
+    if (liveReloadTimer) {
+      clearInterval(liveReloadTimer);
+      liveReloadTimer = null;
+    }
+  }
+
+  function startLiveReload() {
+    stopLiveReload();
+    if (state.staticMode) return;
+    liveReloadTimer = setInterval(() => {
+      if (document.visibilityState === 'visible') checkLiveReload();
+    }, LIVE_RELOAD_MS);
+  }
+
+  async function checkLiveReload() {
+    if (state.staticMode || liveReloadInFlight) return;
+    liveReloadInFlight = true;
+    try {
+      const res = await fetch('/api/revision');
+      if (!res.ok) return;
+      const data = await res.json();
+      const next = data && data.revision;
+      if (!next) return;
+      if (state.revision == null) {
+        state.revision = next;
+        return;
+      }
+      if (next === state.revision) return;
+      state.revision = next;
+      await applyLiveReload();
+    } catch (_) {
+      // offline / server restarting — keep polling
+    } finally {
+      liveReloadInFlight = false;
+    }
+  }
+
+  async function applyLiveReload() {
+    const editing = $('editor').classList.contains('active');
+    const dirty = editing && $('editor-text').value !== state.originalText;
+    const open = state.current
+      ? { root: state.current.root, path: state.current.path, scroll: $('modal-body').scrollTop }
+      : null;
+
+    if (dirty) {
+      // Refresh the index but leave the editor buffer alone.
+      try {
+        await loadFromApi({ quiet: true, preserveEditor: true });
+        toast('Documents changed on disk (unsaved edits kept)', '');
+      } catch (e) {
+        setStatus(e.message, 'bad');
+      }
+      return;
+    }
+
+    try {
+      await loadFromApi({ quiet: true });
+      if (open) {
+        const entry = state.pathIndex.get(fileKey(open.root, open.path));
+        if (entry && entry.kind === 'md' && $('modal').classList.contains('open')) {
+          await showFile(entry, '');
+          $('modal-body').scrollTop = open.scroll;
+        } else if ($('modal').classList.contains('open')) {
+          closeModalUI();
+          toast('Open file was removed', 'bad');
+          return;
+        }
+      }
+      toast('Updated', 'ok');
+    } catch (e) {
+      setStatus(e.message, 'bad');
+    }
+  }
+
+  function applyMetaAndTree(meta, files, { preserveEditor = false } = {}) {
     state.meta = meta;
     state.files = files;
     state.pathIndex = new Map(files.map((f) => [fileKey(f.root, f.path), f]));
@@ -489,7 +578,7 @@
     if (htmlCount) parts.push(`${htmlCount} site${htmlCount === 1 ? '' : 's'}`);
     setStatus(`${parts.join(' · ')} across ${meta.roots?.length || 0} root(s)`, 'ok');
 
-    setView('read');
+    if (!preserveEditor) setView('read');
     setBrowseView(state.view, { close: false });
     consumePendingHash();
   }
@@ -506,6 +595,12 @@
   // Wire UI
   $('refresh').addEventListener('click', () => {
     loadFromApi().catch((e) => setStatus(e.message, 'bad'));
+  });
+  document.addEventListener('visibilitychange', () => {
+    if (document.visibilityState === 'visible' && !state.staticMode) checkLiveReload();
+  });
+  window.addEventListener('focus', () => {
+    if (!state.staticMode) checkLiveReload();
   });
   $('search').addEventListener('input', (e) => renderIndex(e.target.value));
   $('menu-btn').addEventListener('click', toggleMenu);

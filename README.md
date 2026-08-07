@@ -26,7 +26,8 @@ summaries, modal reader, in-doc history, and Mermaid when the CDN is reachable.
   target. No Node, no submodule, no generated assets in git.
 - **Browseable index** — noon UI (IBM Plex + parchment), tile summaries,
   filter search, list or mind-map layout (hamburger → View), full-screen
-  modal, browser back stack.
+  modal, browser back stack. Serve mode live-reloads when docs change
+  (polls a cheap revision stamp; also checks when the tab regains focus).
 - **Honest links** — relative `.md` links resolve across roots via
   project-relative paths; nested `index.html` sites open in a new tab.
 - **Safe by default** — loopback bind only; edit/save is opt-in (`writable`).

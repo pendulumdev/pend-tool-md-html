@@ -10,7 +10,7 @@ use tiny_http::{Header, Method, Request, Response, Server, StatusCode};
 
 use crate::config::{resolve_under_root, Config};
 use crate::error::{MdHtmlError, Result};
-use crate::scan::scan;
+use crate::scan::{revision, scan};
 
 const INDEX_HTML: &str = include_str!("../viewer/index.html");
 const STYLES_CSS: &str = include_str!("../viewer/styles.css");
@@ -124,6 +124,10 @@ fn dispatch(
         }
         (Method::Get, "/api/tree") => match scan(&state.config) {
             Ok(tree) => respond_json(request, &tree).map_err(|e| e.to_string()),
+            Err(e) => respond_error(request, StatusCode(500), &e.to_string()),
+        },
+        (Method::Get, "/api/revision") => match revision(&state.config) {
+            Ok(rev) => respond_json(request, &rev).map_err(|e| e.to_string()),
             Err(e) => respond_error(request, StatusCode(500), &e.to_string()),
         },
         (Method::Get, "/api/file") => match read_file_api(state, query) {
