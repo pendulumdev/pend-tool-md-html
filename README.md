@@ -142,6 +142,17 @@ cargo test
 cargo run -- serve --config path/to/md-html.toml --no-open
 ```
 
+## Versioning and tags
+
+- Version source of truth: `Cargo.toml` (`md-html --version` via clap)
+- Release = annotated git tag `vX.Y.Z` on `main` (no GitHub Release required)
+
+```bash
+# After bumping Cargo.toml version:
+git tag -a v0.2.0 -m "v0.2.0"
+git push origin main --tags
+```
+
 ## Contributing
 
 Open issues and pull requests against
