@@ -4,6 +4,7 @@
 
 mod config;
 mod error;
+mod init;
 mod scan;
 mod server;
 
@@ -29,7 +30,7 @@ struct Cli {
 
 #[derive(Subcommand, Debug)]
 enum Commands {
-    /// Write a starter `md-html.toml` in the current directory
+    /// Write `md-html.toml` (prompts on a TTY; starter file otherwise)
     Init {
         /// Fail if the config already exists (default: refuse to overwrite)
         #[arg(long)]
@@ -88,12 +89,28 @@ fn cmd_init(force: bool) -> Result<(), MdHtmlError> {
     if path.exists() && !force {
         return Err(MdHtmlError::ConfigExists(path));
     }
-    fs::write(&path, default_init_toml()).map_err(|source| MdHtmlError::Io {
+    let body = if init::is_interactive() {
+        let answers = init::prompt_init()?;
+        init::format_init_toml(
+            &answers.title,
+            &answers.description,
+            answers.port,
+            answers.writable,
+            &answers.roots,
+        )
+    } else {
+        default_init_toml().to_string()
+    };
+    fs::write(&path, body).map_err(|source| MdHtmlError::Io {
         path: path.clone(),
         source,
     })?;
-    eprintln!("wrote {CONFIG_FILE_NAME}");
-    Ok(())
+    init::print_wrote(CONFIG_FILE_NAME);
+    if init::is_interactive() && init::prompt_serve()? {
+        cmd_serve(None, None, false, None)
+    } else {
+        Ok(())
+    }
 }
 
 fn find_config(explicit: Option<PathBuf>) -> Result<PathBuf, MdHtmlError> {

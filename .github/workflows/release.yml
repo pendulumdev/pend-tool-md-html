@@ -1,0 +1,129 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  version-check:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.ver.outputs.version }}
+    steps:
+      - uses: actions/checkout@v7
+
+      # The tag is the release, and `md-html --version` reads Cargo.toml via
+      # clap. If those disagree, everyone who pinned the tag gets a build that
+      # misreports its own version, so fail before the release exists.
+      - name: Check the tag matches Cargo.toml
+        id: ver
+        run: |
+          tag="${GITHUB_REF_NAME#v}"
+          pkg="$(sed -n 's/^version = "\([^"]*\)"/\1/p' Cargo.toml | head -n1)"
+          if [ -z "$pkg" ] || [ "$tag" != "$pkg" ]; then
+            echo "::error::tag v$tag does not match Cargo.toml version $pkg"
+            exit 1
+          fi
+          echo "tag v$tag matches Cargo.toml"
+          echo "version=$pkg" >> "$GITHUB_OUTPUT"
+
+  verify:
+    needs: version-check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+
+      # A tag can be placed on any commit, not only one CI has seen, so the full
+      # gate runs again here rather than trusting the branch.
+      - name: Format
+        run: cargo fmt --check
+
+      - name: Clippy
+        run: cargo clippy --all-targets --locked -- -D warnings
+
+      - name: Test
+        run: cargo test --locked
+
+  build:
+    needs: [version-check, verify]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-14
+            target: aarch64-apple-darwin
+          - os: macos-14
+            target: x86_64-apple-darwin
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Build
+        run: cargo build --release --locked --target ${{ matrix.target }}
+
+      - name: Package
+        run: |
+          version="${{ needs.version-check.outputs.version }}"
+          target="${{ matrix.target }}"
+          src="target/${target}/release/md-html"
+          archive="md-html-${version}-${target}.tar.gz"
+          stage="$(mktemp -d)"
+          cp "$src" "${stage}/md-html"
+          chmod +x "${stage}/md-html"
+          tar -C "$stage" -czf "$archive" md-html
+          ls -l "$archive"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: md-html-${{ matrix.target }}
+          path: md-html-*.tar.gz
+          if-no-files-found: error
+
+  publish:
+    needs: [version-check, build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          pattern: md-html-*
+          merge-multiple: true
+
+      - name: Checksums
+        run: |
+          (
+            cd dist
+            sha256sum md-html-*.tar.gz > SHA256SUMS.txt
+          )
+          cat dist/SHA256SUMS.txt
+
+      - name: Publish the GitHub release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            --title "$GITHUB_REF_NAME" \
+            --generate-notes \
+            --verify-tag \
+            dist/md-html-*.tar.gz dist/SHA256SUMS.txt

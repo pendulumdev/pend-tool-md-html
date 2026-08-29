@@ -1,18 +1,9 @@
-/* md-html mind-map - column/row layout, no overlaps, hover focus */
+/* md-html map - root swimlanes, nested folder columns, leaf-first sizing */
 (function () {
   const VIEW_KEY = 'md-html-view';
-
-  const CARD_W = 168;
-  const CARD_H = 72;
-  const CARD_GAP_X = 18;
-  const CARD_GAP_Y = 14;
-  const COL_SECTION = 120;
-  const COL_SUBGROUP = 280;
-  const COL_CARDS = 420;
-  const PAD = 48;
-  const SECTION_GAP = 56;
-  const SUBGROUP_GAP = 28;
-  const FILE_COLS = 3; // cards per row within a subgroup
+  const ZOOM_KEY = 'md-html-map-zoom';
+  const ZOOM_MIN = 0.4;
+  const ZOOM_STEP = 0.1;
 
   function hash32(s) {
     let h = 2166136261;
@@ -31,7 +22,6 @@
       .replace(/"/g, '&quot;');
   }
 
-  /** Soft cubic with a light bow - still readable between grid anchors. */
   function curvePath(x1, y1, x2, y2, seed) {
     const dx = x2 - x1;
     const dy = y2 - y1;
@@ -47,27 +37,45 @@
     return `M${x1.toFixed(1)},${y1.toFixed(1)} C${c1x.toFixed(1)},${c1y.toFixed(1)} ${c2x.toFixed(1)},${c2y.toFixed(1)} ${x2.toFixed(1)},${y2.toFixed(1)}`;
   }
 
-  function truncate(s, n) {
-    s = String(s || '');
-    return s.length <= n ? s : s.slice(0, n - 1) + '…';
+  function fileLookupKey(root, path) {
+    return `${root}\0${path}`.toLowerCase();
   }
 
-  function fileKey(f) {
+  function projectKey(f) {
     return (f.project_path || f.path).toLowerCase();
   }
 
-  function subgroupBlockHeight(fileCount) {
-    if (fileCount === 0) return 40;
-    const rows = Math.ceil(fileCount / FILE_COLS);
-    return rows * CARD_H + (rows - 1) * CARD_GAP_Y;
+  function countFiles(node) {
+    let n = node.files.length;
+    for (const child of node.children.values()) n += countFiles(child);
+    return n;
+  }
+
+  /** Folder tree from flat section subgroups. Leaves first when measuring via nested flex. */
+  function treeFromSection(sec) {
+    const root = { name: sec.top, files: [], children: new Map() };
+    for (const sg of sec.subgroups) {
+      const parts = sg.sub ? sg.sub.split('/').filter(Boolean) : [];
+      let node = root;
+      for (const part of parts) {
+        if (!node.children.has(part)) {
+          node.children.set(part, { name: part, files: [], children: new Map() });
+        }
+        node = node.children.get(part);
+      }
+      for (const f of sg.files) node.files.push(f);
+    }
+    return root;
   }
 
   /**
    * @param {HTMLElement} host
-   * @param {{ sections: Array, projectIndex: Map, onOpen: Function }} opts
+   * @param {{ sections: Array, pathIndex?: Map, projectIndex?: Map, onOpen: Function }} opts
    */
   function render(host, opts) {
-    const { sections, onOpen } = opts;
+    const { sections, onOpen, onToggleRead, fileMarkClass } = opts;
+    const pathIndex = opts.pathIndex || new Map();
+    const projectIndex = opts.projectIndex || new Map();
     host.innerHTML = '';
     host.classList.add('map-host');
 
@@ -76,351 +84,358 @@
       return;
     }
 
-    /** @type {Map<string, {x:number,y:number,entry:object,el?:HTMLElement,sgId:string,secId:string}>} */
-    const positions = new Map();
-    const hubs = []; // {id, label, count, x, y, kind, el?}
-    /** @type {Array<{fromId:string,toId:string,from:{x,y},to:{x,y},seed:string,cls:string,kind:'struct'|'link',path?:SVGPathElement}>} */
-    const edges = [];
+    const viewport = document.createElement('div');
+    viewport.className = 'map-viewport';
 
-    let cursorY = PAD;
-    let maxX = COL_CARDS + FILE_COLS * (CARD_W + CARD_GAP_X);
+    const tools = document.createElement('div');
+    tools.className = 'map-tools';
 
-    for (const sec of sections) {
-      const secId = 'sec:' + sec.top;
-      const secTop = cursorY;
-      let blockY = secTop;
+    const hint = document.createElement('div');
+    hint.className = 'map-hint';
+    hint.textContent = 'Hover to focus · pin to hold · scroll to pan · ⌃wheel to zoom out';
 
-      // Measure section height from subgroups first
-      let contentH = 0;
-      for (const sg of sec.subgroups) {
-        contentH += Math.max(40, subgroupBlockHeight(sg.files.length));
-        contentH += SUBGROUP_GAP;
-      }
-      contentH = Math.max(48, contentH - SUBGROUP_GAP);
+    const zoomBox = document.createElement('div');
+    zoomBox.className = 'map-zoom';
+    zoomBox.setAttribute('role', 'group');
+    zoomBox.setAttribute('aria-label', 'Map zoom');
+    const zoomOutBtn = document.createElement('button');
+    zoomOutBtn.type = 'button';
+    zoomOutBtn.className = 'map-zoom-btn';
+    zoomOutBtn.setAttribute('aria-label', 'Zoom out');
+    zoomOutBtn.title = 'Zoom out';
+    zoomOutBtn.textContent = '−';
+    const zoomResetBtn = document.createElement('button');
+    zoomResetBtn.type = 'button';
+    zoomResetBtn.className = 'map-zoom-btn map-zoom-pct';
+    zoomResetBtn.setAttribute('aria-label', 'Reset zoom');
+    zoomResetBtn.title = 'Reset to 100%';
+    zoomBox.appendChild(zoomOutBtn);
+    zoomBox.appendChild(zoomResetBtn);
+    tools.appendChild(hint);
+    tools.appendChild(zoomBox);
 
-      const hubX = PAD + COL_SECTION / 2;
-      const hubY = secTop + contentH / 2;
-      hubs.push({
-        id: secId,
-        label: sec.top,
-        count: sec.total,
-        x: hubX,
-        y: hubY,
-        kind: 'section',
-      });
+    const board = document.createElement('div');
+    board.className = 'map-board';
 
-      for (const sg of sec.subgroups) {
-        const subLabel = sg.sub || '(root)';
-        const sgId = 'sg:' + sec.top + '/' + subLabel;
-        const n = sg.files.length;
-        const blockH = Math.max(40, subgroupBlockHeight(n));
-        const sgX = PAD + COL_SUBGROUP;
-        const sgY = blockY + blockH / 2;
+    let zoom = getStoredZoom();
+    let pinnedId = null;
+    let hoverId = null;
 
-        hubs.push({
-          id: sgId,
-          label: sg.sub ? subLabel + '/' : 'root',
-          count: n,
-          x: sgX,
-          y: sgY,
-          kind: 'subgroup',
-          secId,
-        });
-        edges.push({
-          fromId: secId,
-          toId: sgId,
-          from: { x: hubX + 36, y: hubY },
-          to: { x: sgX - 36, y: sgY },
-          seed: secId + '→' + sgId,
-          cls: 'map-edge-struct',
-          kind: 'struct',
-        });
+    const svgNS = 'http://www.w3.org/2000/svg';
+    const svg = document.createElementNS(svgNS, 'svg');
+    svg.setAttribute('class', 'map-svg');
+    const edgeLayer = document.createElementNS(svgNS, 'g');
+    edgeLayer.setAttribute('class', 'map-edges');
+    svg.appendChild(edgeLayer);
+    board.appendChild(svg);
 
-        const rows = Math.max(1, Math.ceil(n / FILE_COLS));
-        const gridH = n === 0 ? 0 : rows * CARD_H + (rows - 1) * CARD_GAP_Y;
-        const gridTop = blockY + (blockH - gridH) / 2;
+    /** @type {Map<string, HTMLElement>} */
+    const cardEls = new Map();
+    /** @type {Map<string, object>} */
+    const entryById = new Map();
 
-        for (let fi = 0; fi < n; fi++) {
-          const f = sg.files[fi];
-          const col = fi % FILE_COLS;
-          const row = Math.floor(fi / FILE_COLS);
-          const fx = PAD + COL_CARDS + col * (CARD_W + CARD_GAP_X) + CARD_W / 2;
-          const fy = gridTop + row * (CARD_H + CARD_GAP_Y) + CARD_H / 2;
-          const key = fileKey(f);
-          positions.set(key, {
-            x: fx,
-            y: fy,
-            entry: f,
-            id: 'file:' + key,
-            sgId,
-            secId,
-          });
-          edges.push({
-            fromId: sgId,
-            toId: 'file:' + key,
-            from: { x: sgX + 40, y: sgY },
-            to: { x: fx - CARD_W / 2, y: fy },
-            seed: key + ':h',
-            cls: 'map-edge-struct soft',
-            kind: 'struct',
-          });
-          maxX = Math.max(maxX, fx + CARD_W / 2);
-        }
-
-        blockY += blockH + SUBGROUP_GAP;
-      }
-
-      cursorY = secTop + contentH + SECTION_GAP;
+    function resolveEntry(root, path, projectPath) {
+      return pathIndex.get(fileLookupKey(root, path))
+        || projectIndex.get(String(projectPath || path).toLowerCase())
+        || entryById.get(fileLookupKey(root, path))
+        || null;
     }
 
-    // Relation edges between files (markdown links)
-    const adj = new Map(); // id -> Set<id> (undirected, files + hubs they touch via struct)
+    function renderCard(f) {
+      const id = fileLookupKey(f.root, f.path);
+      entryById.set(id, f);
+      const wrap = document.createElement('div');
+      wrap.className = 'map-card-wrap ' + (fileMarkClass ? fileMarkClass(f) : 'is-unread');
+      wrap.dataset.key = (f.root + '/' + f.path).toLowerCase();
+      wrap.dataset.id = id;
+      wrap.dataset.root = f.root;
+      wrap.dataset.path = f.path;
+      wrap.dataset.project = f.project_path || f.path;
+
+      const mark = document.createElement('button');
+      mark.type = 'button';
+      mark.className = 'mark';
+      mark.title = wrap.classList.contains('is-read') ? 'Mark unread' : 'Mark read';
+      mark.addEventListener('click', (ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        if (onToggleRead) onToggleRead(f);
+      });
+
+      const pin = document.createElement('button');
+      pin.type = 'button';
+      pin.className = 'map-pin';
+      pin.tabIndex = -1;
+      pin.setAttribute('aria-pressed', 'false');
+      pin.setAttribute('aria-label', 'Hold focus');
+      pin.title = 'Hold focus';
+      pin.addEventListener('mousedown', (ev) => ev.preventDefault());
+      pin.addEventListener('click', (ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        togglePinned(id);
+      });
+
+      const el = document.createElement('button');
+      el.type = 'button';
+      el.className = 'map-card' + (f.kind === 'html' ? ' html' : '');
+      el.dataset.id = id;
+      el.dataset.root = f.root;
+      el.dataset.path = f.path;
+      el.dataset.project = f.project_path || f.path;
+      el.title = f.root + '/' + f.path;
+      const label = f.kind === 'html' ? f.dir : f.name;
+      const meta = f.summary || f.path;
+      el.innerHTML =
+        `<span class="map-card-name">${esc(label)}</span>` +
+        `<span class="map-card-meta">${esc(meta)}</span>`;
+      el.addEventListener('click', (ev) => {
+        ev.preventDefault();
+        ev.stopPropagation();
+        const entry = resolveEntry(el.dataset.root, el.dataset.path, el.dataset.project);
+        if (entry) onOpen(entry);
+      });
+      wrap.appendChild(mark);
+      wrap.appendChild(pin);
+      wrap.appendChild(el);
+      cardEls.set(id, wrap);
+      return wrap;
+    }
+
+    function renderNode(node, isLane) {
+      const wrap = document.createElement(isLane ? 'section' : 'div');
+      wrap.className = isLane ? 'map-lane' : 'map-folder';
+
+      const head = document.createElement('header');
+      head.className = isLane ? 'map-lane-head' : 'map-folder-head';
+      const title = document.createElement('span');
+      title.className = isLane ? 'map-lane-title' : 'map-folder-title';
+      title.textContent = node.name;
+      const count = document.createElement('span');
+      count.className = isLane ? 'map-lane-count' : 'map-folder-count';
+      count.textContent = String(countFiles(node));
+      head.appendChild(title);
+      head.appendChild(count);
+      wrap.appendChild(head);
+
+      const cols = document.createElement('div');
+      cols.className = 'map-cols';
+
+      if (node.files.length) {
+        const col = document.createElement('div');
+        col.className = 'map-file-col';
+        if (isLane && node.children.size) {
+          const label = document.createElement('div');
+          label.className = 'map-col-label';
+          label.textContent = 'root';
+          col.appendChild(label);
+        }
+        for (const f of node.files) col.appendChild(renderCard(f));
+        cols.appendChild(col);
+      }
+
+      const names = [...node.children.keys()].sort((a, b) => a.localeCompare(b));
+      for (const name of names) {
+        cols.appendChild(renderNode(node.children.get(name), false));
+      }
+
+      wrap.appendChild(cols);
+      return wrap;
+    }
+
+    for (const sec of sections) {
+      board.appendChild(renderNode(treeFromSection(sec), true));
+    }
+
+    viewport.appendChild(board);
+    host.appendChild(viewport);
+    host.appendChild(tools);
+
+    const adj = new Map();
     const touch = (a, b) => {
+      if (!a || !b || a === b) return;
       if (!adj.has(a)) adj.set(a, new Set());
       if (!adj.has(b)) adj.set(b, new Set());
       adj.get(a).add(b);
       adj.get(b).add(a);
     };
 
-    for (const e of edges) touch(e.fromId, e.toId);
-
+    const linkPairs = [];
     const seenLink = new Set();
-    for (const [key, node] of positions) {
-      const f = node.entry;
-      if (f.kind !== 'md' || !f.links) continue;
+    for (const [id, el] of cardEls) {
+      const f = entryById.get(id)
+        || resolveEntry(el.dataset.root, el.dataset.path, el.dataset.project);
+      if (!f || f.kind !== 'md' || !f.links) continue;
+      const fromProj = projectKey(f);
       for (const target of f.links) {
-        const toKey = String(target).toLowerCase();
-        const to = positions.get(toKey);
-        if (!to) continue;
-        const a = key < toKey ? key : toKey;
-        const b = key < toKey ? toKey : key;
+        const toEntry = projectIndex.get(String(target).toLowerCase());
+        if (!toEntry) continue;
+        const toId = fileLookupKey(toEntry.root, toEntry.path);
+        if (!cardEls.has(toId)) continue;
+        const a = fromProj < String(target).toLowerCase() ? id : toId;
+        const b = a === id ? toId : id;
         const ek = a + '|' + b;
         if (seenLink.has(ek)) continue;
         seenLink.add(ek);
-        const fromId = 'file:' + key;
-        const toId = 'file:' + toKey;
-        edges.push({
-          fromId,
-          toId,
-          from: { x: node.x, y: node.y },
-          to: { x: to.x, y: to.y },
-          seed: ek,
-          cls: 'map-edge-link',
-          kind: 'link',
-        });
-        touch(fromId, toId);
+        linkPairs.push({ fromId: id, toId, seed: ek });
+        touch(id, toId);
       }
     }
 
-    const width = Math.max(960, maxX + PAD);
-    const height = Math.max(560, cursorY + PAD);
-
-    const viewport = document.createElement('div');
-    viewport.className = 'map-viewport';
-    viewport.tabIndex = 0;
-
-    const hint = document.createElement('div');
-    hint.className = 'map-hint';
-    hint.textContent = 'Hover to focus related · drag to pan · scroll to zoom · click to open';
-
-    const stage = document.createElement('div');
-    stage.className = 'map-stage';
-
-    const svgNS = 'http://www.w3.org/2000/svg';
-    const svg = document.createElementNS(svgNS, 'svg');
-    svg.setAttribute('class', 'map-svg');
-    svg.setAttribute('width', String(width));
-    svg.setAttribute('height', String(height));
-    svg.setAttribute('viewBox', `0 0 ${width} ${height}`);
-
-    const edgeLayer = document.createElementNS(svgNS, 'g');
-    edgeLayer.setAttribute('class', 'map-edges');
-    for (const e of edges) {
-      const p = document.createElementNS(svgNS, 'path');
-      p.setAttribute('d', curvePath(e.from.x, e.from.y, e.to.x, e.to.y, e.seed));
-      p.setAttribute('class', e.cls);
-      p.dataset.from = e.fromId;
-      p.dataset.to = e.toId;
-      p.dataset.kind = e.kind;
-      e.path = p;
-      edgeLayer.appendChild(p);
-    }
-    svg.appendChild(edgeLayer);
-
-    const nodes = document.createElement('div');
-    nodes.className = 'map-nodes';
-    nodes.style.width = width + 'px';
-    nodes.style.height = height + 'px';
-
-    /** @type {Map<string, HTMLElement>} */
-    const elById = new Map();
-
-    for (const h of hubs) {
-      const el = document.createElement('div');
-      el.className = 'map-hub map-hub-' + h.kind;
-      el.dataset.id = h.id;
-      el.style.left = h.x + 'px';
-      el.style.top = h.y + 'px';
-      el.innerHTML = `<span class="map-hub-label">${esc(h.label)}</span><span class="map-hub-count">${h.count}</span>`;
-      nodes.appendChild(el);
-      elById.set(h.id, el);
-      h.el = el;
+    function boardPoint(el) {
+      const br = board.getBoundingClientRect();
+      const cr = el.getBoundingClientRect();
+      const z = zoom || 1;
+      return {
+        x: (cr.left - br.left + cr.width / 2) / z,
+        y: (cr.top - br.top + cr.height / 2) / z,
+      };
     }
 
-    for (const [, node] of positions) {
-      const f = node.entry;
-      const el = document.createElement('button');
-      el.type = 'button';
-      el.className = 'map-card' + (f.kind === 'html' ? ' html' : '');
-      el.dataset.id = node.id;
-      el.style.left = node.x + 'px';
-      el.style.top = node.y + 'px';
-      el.style.width = CARD_W + 'px';
-      el.style.height = CARD_H + 'px';
-      el.title = f.root + '/' + f.path;
-      const isHtml = f.kind === 'html';
-      el.innerHTML = `
-        <span class="map-card-name">${esc(isHtml ? f.dir : f.name)}</span>
-        <span class="map-card-meta">${esc(truncate(f.summary || f.path, 72))}</span>`;
-      el.addEventListener('click', (ev) => {
-        ev.stopPropagation();
-        onOpen(f);
-      });
-      nodes.appendChild(el);
-      elById.set(node.id, el);
-      node.el = el;
+    function drawEdges() {
+      while (edgeLayer.firstChild) edgeLayer.removeChild(edgeLayer.firstChild);
+      const w = Math.max(board.scrollWidth, board.clientWidth);
+      const h = Math.max(board.scrollHeight, board.clientHeight);
+      svg.setAttribute('width', String(w));
+      svg.setAttribute('height', String(h));
+      svg.setAttribute('viewBox', `0 0 ${w} ${h}`);
+      for (const pair of linkPairs) {
+        const a = cardEls.get(pair.fromId);
+        const b = cardEls.get(pair.toId);
+        if (!a || !b) continue;
+        const from = boardPoint(a);
+        const to = boardPoint(b);
+        const p = document.createElementNS(svgNS, 'path');
+        p.setAttribute('d', curvePath(from.x, from.y, to.x, to.y, pair.seed));
+        p.setAttribute('class', 'map-edge-link');
+        p.dataset.from = pair.fromId;
+        p.dataset.to = pair.toId;
+        edgeLayer.appendChild(p);
+      }
     }
 
-    stage.appendChild(svg);
-    stage.appendChild(nodes);
-    viewport.appendChild(hint);
-    viewport.appendChild(stage);
-    host.appendChild(viewport);
-
-    // --- Hover focus: highlight node + related (1-hop via adj) ---
-    function clearFocus() {
+    function clearHighlight() {
       viewport.classList.remove('map-focusing');
-      for (const el of elById.values()) {
+      for (const el of cardEls.values()) {
         el.classList.remove('is-focus', 'is-related', 'is-dim');
       }
-      for (const e of edges) {
-        e.path.classList.remove('is-focus', 'is-dim');
+      for (const p of edgeLayer.querySelectorAll('path')) {
+        p.classList.remove('is-focus', 'is-dim');
       }
     }
 
-    function setFocus(id) {
+    function paintFocus(id) {
       viewport.classList.add('map-focusing');
       const related = new Set([id]);
       const hop = adj.get(id);
       if (hop) for (const r of hop) related.add(r);
-
-      // Also keep section hub related when focusing a file/subgroup under it
-      for (const [, node] of positions) {
-        if (related.has(node.id)) {
-          related.add(node.sgId);
-          related.add(node.secId);
-        }
-      }
-      for (const h of hubs) {
-        if (related.has(h.id) && h.secId) related.add(h.secId);
-      }
-
-      for (const [nid, el] of elById) {
+      for (const [nid, el] of cardEls) {
+        el.classList.remove('is-focus', 'is-related', 'is-dim');
         if (nid === id) el.classList.add('is-focus');
         else if (related.has(nid)) el.classList.add('is-related');
         else el.classList.add('is-dim');
       }
-      for (const e of edges) {
-        const bothRelated = related.has(e.fromId) && related.has(e.toId);
-        if (bothRelated) e.path.classList.add('is-focus');
-        else e.path.classList.add('is-dim');
+      for (const p of edgeLayer.querySelectorAll('path')) {
+        const touches = p.dataset.from === id || p.dataset.to === id;
+        p.classList.toggle('is-focus', touches);
+        p.classList.toggle('is-dim', !touches);
       }
     }
 
-    for (const [id, el] of elById) {
-      el.addEventListener('pointerenter', () => setFocus(id));
-      el.addEventListener('pointerleave', (e) => {
-        // Leaving to another map node keeps focus via that node's enter
-        const next = e.relatedTarget && e.relatedTarget.closest
-          ? e.relatedTarget.closest('[data-id]')
-          : null;
-        if (!next || !nodes.contains(next)) clearFocus();
+    function syncPins() {
+      for (const [nid, el] of cardEls) {
+        const on = nid === pinnedId;
+        el.classList.toggle('is-pinned', on);
+        const btn = el.querySelector('.map-pin');
+        if (!btn) continue;
+        btn.setAttribute('aria-pressed', on ? 'true' : 'false');
+        btn.setAttribute('aria-label', on ? 'Clear focus' : 'Hold focus');
+        btn.title = on ? 'Clear focus' : 'Hold focus';
+      }
+    }
+
+    function applyHighlight() {
+      syncPins();
+      const id = pinnedId || hoverId;
+      if (!id) clearHighlight();
+      else paintFocus(id);
+    }
+
+    function togglePinned(id) {
+      pinnedId = pinnedId === id ? null : id;
+      applyHighlight();
+    }
+
+    function pinCard(id) {
+      if (pinnedId === id) {
+        applyHighlight();
+        return;
+      }
+      pinnedId = id;
+      applyHighlight();
+    }
+
+    function applyZoom(next) {
+      zoom = Math.round(Math.min(1, Math.max(ZOOM_MIN, next)) * 100) / 100;
+      board.style.zoom = String(zoom);
+      zoomResetBtn.textContent = Math.round(zoom * 100) + '%';
+      zoomOutBtn.disabled = zoom <= ZOOM_MIN;
+      zoomResetBtn.disabled = zoom >= 1;
+      setStoredZoom(zoom);
+      requestAnimationFrame(drawEdges);
+    }
+
+    for (const [id, el] of cardEls) {
+      el.addEventListener('pointerenter', () => {
+        hoverId = id;
+        if (!pinnedId) applyHighlight();
       });
+      el.addEventListener('pointerleave', (e) => {
+        const next = e.relatedTarget && e.relatedTarget.closest
+          ? e.relatedTarget.closest('.map-card-wrap')
+          : null;
+        if (next && board.contains(next)) return;
+        hoverId = null;
+        if (!pinnedId) applyHighlight();
+      });
+      el.addEventListener('focusin', () => pinCard(id));
+      const cardBtn = el.querySelector('.map-card');
+      const markBtn = el.querySelector('.mark');
+      if (cardBtn) cardBtn.addEventListener('focus', () => pinCard(id));
+      if (markBtn) markBtn.addEventListener('focus', () => pinCard(id));
     }
 
-    // Pan / zoom
-    let scale = 1;
-    let tx = 0;
-    let ty = 0;
-    let dragging = false;
-    let lastX = 0;
-    let lastY = 0;
-    let moved = false;
-
-    const applyTransform = () => {
-      stage.style.transform = `translate(${tx}px, ${ty}px) scale(${scale})`;
-    };
-    applyTransform();
-
-    viewport.addEventListener('pointerdown', (e) => {
-      if (e.target.closest('.map-card')) return;
-      dragging = true;
-      moved = false;
-      lastX = e.clientX;
-      lastY = e.clientY;
-      viewport.classList.add('panning');
-      viewport.setPointerCapture(e.pointerId);
-    });
-    viewport.addEventListener('pointermove', (e) => {
-      if (!dragging) return;
-      const dx = e.clientX - lastX;
-      const dy = e.clientY - lastY;
-      if (Math.abs(dx) + Math.abs(dy) > 2) moved = true;
-      tx += dx;
-      ty += dy;
-      lastX = e.clientX;
-      lastY = e.clientY;
-      applyTransform();
-    });
-    const endPan = (e) => {
-      if (!dragging) return;
-      dragging = false;
-      viewport.classList.remove('panning');
-      try { viewport.releasePointerCapture(e.pointerId); } catch (_) {}
-      if (!moved) clearFocus();
-    };
-    viewport.addEventListener('pointerup', endPan);
-    viewport.addEventListener('pointercancel', endPan);
-
+    zoomOutBtn.addEventListener('click', () => applyZoom(zoom - ZOOM_STEP));
+    zoomResetBtn.addEventListener('click', () => applyZoom(1));
     viewport.addEventListener('wheel', (e) => {
+      if (!e.ctrlKey && !e.metaKey) return;
       e.preventDefault();
-      const rect = viewport.getBoundingClientRect();
-      const mx = e.clientX - rect.left;
-      const my = e.clientY - rect.top;
-      const prev = scale;
-      const next = Math.min(2.2, Math.max(0.35, scale * (e.deltaY > 0 ? 0.92 : 1.08)));
-      tx = mx - (mx - tx) * (next / prev);
-      ty = my - (my - ty) * (next / prev);
-      scale = next;
-      applyTransform();
+      const dir = e.deltaY > 0 ? -ZOOM_STEP : ZOOM_STEP;
+      applyZoom(zoom + dir);
     }, { passive: false });
-
-    requestAnimationFrame(() => {
-      const vw = viewport.clientWidth || 900;
-      const vh = viewport.clientHeight || 600;
-      const fitW = (vw - 32) / width;
-      const fitH = (vh - 32) / height;
-      const fit = Math.min(1, fitW, fitH);
-      if (fit < 0.98) {
-        scale = Math.max(0.4, fit);
-        tx = 16;
-        ty = 12;
-        applyTransform();
-      }
+    viewport.addEventListener('keydown', (e) => {
+      if (e.key !== 'Escape' || !pinnedId) return;
+      pinnedId = null;
+      applyHighlight();
     });
+
+    applyZoom(zoom);
+    requestAnimationFrame(() => requestAnimationFrame(drawEdges));
+    if (host._mapRo) host._mapRo.disconnect();
+    const ro = typeof ResizeObserver === 'function'
+      ? new ResizeObserver(() => drawEdges())
+      : null;
+    if (ro) {
+      ro.observe(board);
+      host._mapRo = ro;
+    }
   }
 
   function clear(host) {
+    if (host && host._mapRo) {
+      host._mapRo.disconnect();
+      host._mapRo = null;
+    }
     if (host) host.innerHTML = '';
   }
 
@@ -435,6 +450,18 @@
 
   function setStoredView(view) {
     try { sessionStorage.setItem(VIEW_KEY, view); } catch (_) {}
+  }
+
+  function getStoredZoom() {
+    try {
+      const z = parseFloat(sessionStorage.getItem(ZOOM_KEY));
+      if (Number.isFinite(z)) return Math.min(1, Math.max(ZOOM_MIN, z));
+    } catch (_) {}
+    return 1;
+  }
+
+  function setStoredZoom(z) {
+    try { sessionStorage.setItem(ZOOM_KEY, String(z)); } catch (_) {}
   }
 
   window.MdHtmlMap = { render, clear, getStoredView, setStoredView };

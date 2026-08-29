@@ -1,10 +1,19 @@
 <!doctype html>
-<html lang="en">
+<html lang="en" data-theme="noon">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <meta name="color-scheme" content="light" />
+  <meta name="color-scheme" content="light dark" />
   <title>Documents</title>
+  <script>
+    (function () {
+      try {
+        var m = document.cookie.match(/(?:^|; )mdh-theme=([^;]*)/);
+        document.documentElement.dataset.theme =
+          m && decodeURIComponent(m[1]) === 'midnight' ? 'midnight' : 'noon';
+      } catch (_) {}
+    })();
+  </script>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
   <link
@@ -14,23 +23,6 @@
   <link rel="stylesheet" href="/styles.css" />
 </head>
 <body>
-  <button type="button" id="menu-btn" class="menu-btn" aria-label="Open menu" aria-expanded="false" aria-controls="menu-panel">
-    <span class="menu-btn-bars" aria-hidden="true"></span>
-  </button>
-
-  <div id="menu-panel" class="menu-panel" hidden role="dialog" aria-label="Viewer menu">
-    <div class="menu-panel-head">
-      <span class="menu-panel-title">View</span>
-      <button type="button" id="menu-close" class="menu-close" aria-label="Close menu">×</button>
-    </div>
-    <div class="view-toggle" role="radiogroup" aria-label="Layout">
-      <button type="button" class="view-opt active" data-view="list" role="radio" aria-checked="true">List</button>
-      <button type="button" class="view-opt" data-view="map" role="radio" aria-checked="false">Map</button>
-    </div>
-    <p class="menu-note">Map lays out roots and folders as hubs, with curved links between related markdown files.</p>
-  </div>
-  <div id="menu-backdrop" class="menu-backdrop" hidden></div>
-
   <div class="page">
     <header class="hero">
       <h1 id="hero-title">Documents</h1>
@@ -39,6 +31,19 @@
       <div class="toolbar">
         <button id="refresh" class="btn ghost" hidden>Refresh</button>
         <input id="search" class="search" placeholder="Filter files…" hidden />
+        <div class="switch" role="radiogroup" aria-label="Layout">
+          <button type="button" class="switch-opt active" data-view="list" role="radio" aria-checked="true">List</button>
+          <button type="button" class="switch-opt" data-view="map" role="radio" aria-checked="false">Map</button>
+        </div>
+        <div class="switch" role="radiogroup" aria-label="Theme">
+          <button type="button" class="switch-opt icon-opt active" data-theme="noon" role="radio" aria-checked="true" aria-label="Noon" title="Noon">
+            <svg viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="8" r="3"/><path d="M8 1.5v1.6M8 12.9v1.6M1.5 8h1.6M12.9 8h1.6M3.2 3.2l1.1 1.1M11.7 11.7l1.1 1.1M3.2 12.8l1.1-1.1M11.7 4.3l1.1-1.1" fill="none" stroke="currentColor" stroke-width="1.4" stroke-linecap="round"/></svg>
+          </button>
+          <button type="button" class="switch-opt icon-opt" data-theme="midnight" role="radio" aria-checked="false" aria-label="Midnight" title="Midnight">
+            <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M11.2 10.6A5.2 5.2 0 0 1 6.1 3.4 5.4 5.4 0 1 0 11.2 10.6z"/></svg>
+          </button>
+        </div>
+        <button type="button" id="reset-state" class="btn ghost compact" title="Clear viewed and read marks">Reset</button>
       </div>
 
       <div id="status" class="status"><span class="dot"></span><span class="msg">Starting…</span></div>
@@ -57,7 +62,7 @@
 
     <div class="footer">
       <code>md-html</code> · localhost markdown browser ·
-      <a href="https://github.com/pendulumdev/md-html">pendulumdev/md-html</a>
+      <a href="https://github.com/pendulumdev/pend-tool-md-html">pendulumdev/pend-tool-md-html</a>
     </div>
   </div>
 
@@ -65,6 +70,7 @@
     <div class="modal-bar">
       <button class="btn ghost" id="back-btn" hidden title="Back to previous document">←</button>
       <div class="title" id="modal-title">Document<span class="sub" id="modal-sub"></span></div>
+      <button type="button" id="mark-read" class="mark" hidden title="Mark read">Mark read</button>
       <button class="btn" id="edit-btn" hidden>Edit</button>
       <button class="btn primary" id="save-btn" hidden>Save</button>
       <button class="btn ghost" id="cancel-btn" hidden>Cancel</button>

@@ -1,7 +1,7 @@
-//! Typed errors for `md-html`. Fail closed; never panic outside tests.
+//! Typed errors for `md-html`. Fail closed.  
+//! Do not catch an error and continue with a permissive fallback.
 
 use std::path::PathBuf;
-
 use thiserror::Error;
 
 #[derive(Debug, Error)]
@@ -45,6 +45,17 @@ pub enum MdHtmlError {
 
     #[error("config already exists: {0}")]
     ConfigExists(PathBuf),
+
+    #[error("indexed file limit reached ({max}); narrow [[roots]] or add exclude patterns")]
+    TooManyFiles { max: usize },
+
+    #[error(
+        "directory walk limit reached ({max} entries); narrow [[roots]] or exclude vendor/build trees"
+    )]
+    WalkLimit { max: usize },
+
+    #[error("file exceeds {max_bytes} byte open limit: {path}")]
+    FileTooLarge { path: PathBuf, max_bytes: u64 },
 }
 
 pub type Result<T> = std::result::Result<T, MdHtmlError>;

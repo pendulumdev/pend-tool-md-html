@@ -41,13 +41,16 @@ pub fn serve(config: Config) -> Result<()> {
         .parse()
         .map_err(|e| MdHtmlError::Server(format!("bad listen address: {e}")))?;
 
-    let server = Server::http(addr).map_err(|e| MdHtmlError::Server(e.to_string()))?;
     let url = format!("http://{}:{}/", config.bind, config.port);
+    // Fail closed on an oversized tree before occupying the port or opening a browser.
+    let tree = scan(&config)?;
+    let server = Server::http(addr).map_err(|e| MdHtmlError::Server(e.to_string()))?;
     eprintln!("md-html serving {url}");
     eprintln!("  project: {}", config.project_root.display());
     for r in &config.roots {
         eprintln!("  root [{}]: {}", r.label, r.abs_path.display());
     }
+    eprintln!("  indexed {} files", tree.files.len());
 
     if config.open_browser {
         let _ = open_browser(&url);
@@ -173,7 +176,7 @@ fn read_file_api(state: &AppState, query: &str) -> Result<String> {
         .find(|r| r.label == root_label)
         .ok_or(MdHtmlError::NotFound(root_label))?;
     let abs = resolve_under_root(root, &file_path)?;
-    fs::read_to_string(&abs).map_err(|source| MdHtmlError::Io { path: abs, source })
+    read_text_capped(&abs, state.config.max_file_bytes)
 }
 
 fn write_file_api(state: &AppState, body: &str) -> Result<()> {
@@ -186,6 +189,12 @@ fn write_file_api(state: &AppState, body: &str) -> Result<()> {
         .find(|r| r.label == payload.root)
         .ok_or_else(|| MdHtmlError::NotFound(payload.root.clone()))?;
     let abs = resolve_under_root(root, &payload.path)?;
+    if payload.content.len() as u64 > state.config.max_file_bytes {
+        return Err(MdHtmlError::FileTooLarge {
+            path: abs,
+            max_bytes: state.config.max_file_bytes,
+        });
+    }
     fs::write(&abs, payload.content.as_bytes())
         .map_err(|source| MdHtmlError::Io { path: abs, source })
 }
@@ -368,8 +377,7 @@ pub fn build(config: &Config, out_dir: &std::path::Path) -> Result<()> {
             .find(|r| r.label == f.root)
             .ok_or_else(|| MdHtmlError::NotFound(f.root.clone()))?;
         let abs = resolve_under_root(root, &f.path)?;
-        let content =
-            fs::read_to_string(&abs).map_err(|source| MdHtmlError::Io { path: abs, source })?;
+        let content = read_text_capped(&abs, config.max_file_bytes)?;
         files_payload.push(serde_json::json!({
             "root": f.root,
             "path": f.path,
@@ -415,7 +423,55 @@ pub fn build(config: &Config, out_dir: &std::path::Path) -> Result<()> {
     Ok(())
 }
 
+fn read_text_capped(path: &std::path::Path, max_bytes: u64) -> Result<String> {
+    read_text_capped_at(path, max_bytes)
+}
+
+fn read_text_capped_at(path: &std::path::Path, max_bytes: u64) -> Result<String> {
+    let meta = fs::metadata(path).map_err(|source| MdHtmlError::Io {
+        path: path.to_path_buf(),
+        source,
+    })?;
+    if meta.len() > max_bytes {
+        return Err(MdHtmlError::FileTooLarge {
+            path: path.to_path_buf(),
+            max_bytes,
+        });
+    }
+    fs::read_to_string(path).map_err(|source| MdHtmlError::Io {
+        path: path.to_path_buf(),
+        source,
+    })
+}
+
 fn write_out(dir: &std::path::Path, name: &str, bytes: &[u8]) -> Result<()> {
     let path = dir.join(name);
     fs::write(&path, bytes).map_err(|source| MdHtmlError::Io { path, source })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tempfile::tempdir;
+
+    #[test]
+    fn read_text_capped_rejects_oversize_file() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("big.md");
+        fs::write(&path, "0123456789").unwrap();
+        let err = read_text_capped_at(&path, 5).unwrap_err();
+        assert!(matches!(
+            err,
+            MdHtmlError::FileTooLarge { max_bytes: 5, .. }
+        ));
+    }
+
+    #[test]
+    fn read_text_capped_allows_file_at_limit() {
+        let dir = tempdir().unwrap();
+        let path = dir.path().join("ok.md");
+        fs::write(&path, "hello").unwrap();
+        let text = read_text_capped_at(&path, 5).unwrap();
+        assert_eq!(text, "hello");
+    }
 }

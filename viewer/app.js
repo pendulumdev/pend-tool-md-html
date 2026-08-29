@@ -2,6 +2,38 @@
 (function () {
   const $ = (id) => document.getElementById(id);
 
+  const COOKIE_MAX = 3500;
+  const COOKIE_AGE = 60 * 60 * 24 * 365;
+
+  function cookieGet(name) {
+    const m = document.cookie.match(new RegExp('(?:^|; )' + name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&') + '=([^;]*)'));
+    return m ? decodeURIComponent(m[1]) : '';
+  }
+  function cookieSet(name, value) {
+    document.cookie = name + '=' + encodeURIComponent(value) + '; path=/; max-age=' + COOKIE_AGE + '; SameSite=Lax';
+  }
+  function cookieDel(name) {
+    document.cookie = name + '=; path=/; max-age=0; SameSite=Lax';
+  }
+  function packKeys(set) {
+    let keys = [...set];
+    let packed = keys.join('\n');
+    while (packed.length > COOKIE_MAX && keys.length) {
+      keys.shift();
+      packed = keys.join('\n');
+    }
+    return packed;
+  }
+  function unpackKeys(raw) {
+    if (!raw) return new Set();
+    return new Set(raw.split(/[\n|]/).map((p) => p.trim()).filter(Boolean));
+  }
+
+  const markKey = (root, path) => `${root}/${path}`.toLowerCase();
+
+  const viewedKeys = unpackKeys(cookieGet('mdh-viewed'));
+  const readKeys = unpackKeys(cookieGet('mdh-read'));
+
   const state = {
     meta: null,
     files: [],
@@ -11,7 +43,8 @@
     originalText: '',
     staticMode: false,
     staticFiles: new Map(), // key -> content
-    view: (window.MdHtmlMap && window.MdHtmlMap.getStoredView()) || 'list',
+    view: cookieGet('mdh-view') === 'map' ? 'map' : 'list',
+    theme: document.documentElement.dataset.theme === 'midnight' ? 'midnight' : 'noon',
     revision: null,
   };
   let modalDepth = 0;
@@ -146,10 +179,14 @@
       }
       window.MdHtmlMap.render(mapRoot, {
         sections,
+        pathIndex: state.pathIndex,
         projectIndex: state.projectIndex,
+        fileMarkClass,
+        onToggleRead: toggleRead,
         onOpen: (f) => {
-          if (f.kind === 'html') openHtmlInNewTab(f);
-          else openFile(f);
+          const live = state.pathIndex.get(fileKey(f.root, f.path)) || f;
+          if (live.kind === 'html') openHtmlInNewTab(live);
+          else openFile(live);
         },
       });
       return;
@@ -186,8 +223,17 @@
         ul.className = 'files';
         for (const f of sg.files) {
           const li = document.createElement('li');
-          li.className = 'file loaded';
-          li.dataset.key = fileKey(f.root, f.path);
+          li.className = 'file loaded ' + fileMarkClass(f);
+          li.dataset.key = markKey(f.root, f.path);
+          const mark = document.createElement('button');
+          mark.type = 'button';
+          mark.className = 'mark';
+          mark.title = readKeys.has(li.dataset.key) ? 'Mark unread' : 'Mark read';
+          mark.addEventListener('click', (ev) => {
+            ev.preventDefault();
+            ev.stopPropagation();
+            toggleRead(f);
+          });
           const btn = document.createElement('button');
           btn.className = 'open';
           const isHtml = f.kind === 'html';
@@ -207,6 +253,7 @@
           } else {
             btn.addEventListener('click', () => openFile(f));
           }
+          li.appendChild(mark);
           li.appendChild(btn);
           ul.appendChild(li);
         }
@@ -217,35 +264,96 @@
     }
   }
 
-  function setBrowseView(view, { close = true } = {}) {
+  function setBrowseView(view) {
     state.view = view === 'map' ? 'map' : 'list';
-    if (window.MdHtmlMap) window.MdHtmlMap.setStoredView(state.view);
-    document.querySelectorAll('.view-opt').forEach((btn) => {
+    cookieSet('mdh-view', state.view);
+    document.querySelectorAll('[data-view]').forEach((btn) => {
       const on = btn.dataset.view === state.view;
       btn.classList.toggle('active', on);
       btn.setAttribute('aria-checked', on ? 'true' : 'false');
     });
     renderIndex($('search').value);
-    if (close) closeMenu();
   }
 
-  function openMenu() {
-    $('menu-panel').hidden = false;
-    $('menu-backdrop').hidden = false;
-    $('menu-btn').setAttribute('aria-expanded', 'true');
-    document.body.classList.add('menu-open');
+  function applyTheme(theme) {
+    state.theme = theme === 'midnight' ? 'midnight' : 'noon';
+    document.documentElement.dataset.theme = state.theme;
+    cookieSet('mdh-theme', state.theme);
+    document.querySelectorAll('.switch-opt[data-theme]').forEach((btn) => {
+      const on = btn.dataset.theme === state.theme;
+      btn.classList.toggle('active', on);
+      btn.setAttribute('aria-checked', on ? 'true' : 'false');
+    });
+    if (window.mermaid) {
+      window.mermaid.initialize({
+        startOnLoad: false,
+        theme: state.theme === 'midnight' ? 'dark' : 'neutral',
+      });
+    }
   }
 
-  function closeMenu() {
-    $('menu-panel').hidden = true;
-    $('menu-backdrop').hidden = true;
-    $('menu-btn').setAttribute('aria-expanded', 'false');
-    document.body.classList.remove('menu-open');
+  function fileMarkClass(f) {
+    const k = markKey(f.root, f.path);
+    if (readKeys.has(k)) return 'is-read';
+    if (viewedKeys.has(k)) return 'is-viewed';
+    return 'is-unread';
   }
 
-  function toggleMenu() {
-    if ($('menu-panel').hidden) openMenu();
-    else closeMenu();
+  function persistMarks() {
+    cookieSet('mdh-viewed', packKeys(viewedKeys));
+    cookieSet('mdh-read', packKeys(readKeys));
+  }
+
+  function applyMarks() {
+    document.querySelectorAll('[data-key]').forEach((el) => {
+      const k = el.dataset.key;
+      el.classList.remove('is-read', 'is-viewed', 'is-unread');
+      el.classList.add(readKeys.has(k) ? 'is-read' : viewedKeys.has(k) ? 'is-viewed' : 'is-unread');
+      const mark = el.querySelector('.mark');
+      if (mark) mark.title = readKeys.has(k) ? 'Mark unread' : 'Mark read';
+    });
+    syncModalMark();
+  }
+
+  function markViewed(entry) {
+    if (!entry) return;
+    viewedKeys.add(markKey(entry.root, entry.path));
+    persistMarks();
+    applyMarks();
+  }
+
+  function toggleRead(entry) {
+    if (!entry) return;
+    const k = markKey(entry.root, entry.path);
+    if (readKeys.has(k)) readKeys.delete(k);
+    else readKeys.add(k);
+    persistMarks();
+    applyMarks();
+  }
+
+  function resetMarks() {
+    if (!confirm('Clear viewed and read marks for this project?')) return;
+    viewedKeys.clear();
+    readKeys.clear();
+    cookieDel('mdh-viewed');
+    cookieDel('mdh-read');
+    applyMarks();
+    toast('Marks cleared', 'ok');
+  }
+
+  function syncModalMark() {
+    const btn = $('mark-read');
+    if (!btn) return;
+    const cur = state.current;
+    if (!cur || !$('modal').classList.contains('open')) {
+      btn.hidden = true;
+      return;
+    }
+    btn.hidden = false;
+    const read = readKeys.has(markKey(cur.root, cur.path));
+    btn.classList.toggle('is-read', read);
+    btn.textContent = read ? 'Read' : 'Mark read';
+    btn.title = read ? 'Mark unread' : 'Mark read';
   }
 
   function openHtmlInNewTab(entry) {
@@ -256,6 +364,7 @@
     const url = `/files/${encodeURIComponent(entry.root)}/${entry.path.split('/').map(encodeURIComponent).join('/')}`;
     const win = window.open(url, '_blank', 'noopener');
     if (!win) toast('Pop-up blocked - allow pop-ups for this page', 'bad');
+    markViewed(entry);
   }
 
   async function readFile(entry) {
@@ -307,6 +416,8 @@
     document.body.style.overflow = 'hidden';
     setView('read');
     updateNavUI();
+    markViewed(entry);
+    syncModalMark();
     try {
       const text = await readFile(entry);
       state.originalText = text;
@@ -332,7 +443,10 @@
       const s = document.createElement('script');
       s.src = 'https://cdn.jsdelivr.net/npm/mermaid@11/dist/mermaid.min.js';
       s.onload = () => {
-        window.mermaid.initialize({ startOnLoad: false, theme: 'neutral' });
+        window.mermaid.initialize({
+          startOnLoad: false,
+          theme: state.theme === 'midnight' ? 'dark' : 'neutral',
+        });
         resolve(window.mermaid);
       };
       s.onerror = () => reject(new Error('Mermaid CDN failed to load'));
@@ -388,6 +502,7 @@
     setView('read');
     modalDepth = 0;
     updateNavUI();
+    syncModalMark();
   }
 
   function closeModal() {
@@ -456,7 +571,15 @@
       fetch('/api/tree'),
       fetch('/api/revision'),
     ]);
-    if (!metaRes.ok || !treeRes.ok) throw new Error('Failed to load document index');
+    if (!metaRes.ok || !treeRes.ok) {
+      let detail = 'Failed to load document index';
+      const bad = !treeRes.ok ? treeRes : metaRes;
+      try {
+        const body = await bad.json();
+        if (body && body.error) detail = body.error;
+      } catch (_) {}
+      throw new Error(detail);
+    }
     state.meta = await metaRes.json();
     const tree = await treeRes.json();
     if (revRes.ok) {
@@ -579,7 +702,7 @@
     setStatus(`${parts.join(' · ')} across ${meta.roots?.length || 0} root(s)`, 'ok');
 
     if (!preserveEditor) setView('read');
-    setBrowseView(state.view, { close: false });
+    setBrowseView(state.view);
     consumePendingHash();
   }
 
@@ -603,14 +726,16 @@
     if (!state.staticMode) checkLiveReload();
   });
   $('search').addEventListener('input', (e) => renderIndex(e.target.value));
-  $('menu-btn').addEventListener('click', toggleMenu);
-  $('menu-close').addEventListener('click', closeMenu);
-  $('menu-backdrop').addEventListener('click', closeMenu);
-  document.querySelectorAll('.view-opt').forEach((btn) => {
+  document.querySelectorAll('[data-view]').forEach((btn) => {
     btn.addEventListener('click', () => setBrowseView(btn.dataset.view));
   });
-  // Sync toggle UI to stored view before first paint of options
-  document.querySelectorAll('.view-opt').forEach((btn) => {
+  document.querySelectorAll('.switch-opt[data-theme]').forEach((btn) => {
+    btn.addEventListener('click', () => applyTheme(btn.dataset.theme));
+  });
+  $('reset-state').addEventListener('click', resetMarks);
+  $('mark-read').addEventListener('click', () => toggleRead(state.current));
+  applyTheme(state.theme);
+  document.querySelectorAll('[data-view]').forEach((btn) => {
     const on = btn.dataset.view === state.view;
     btn.classList.toggle('active', on);
     btn.setAttribute('aria-checked', on ? 'true' : 'false');
@@ -669,11 +794,6 @@
   });
 
   document.addEventListener('keydown', (e) => {
-    if (e.key === 'Escape' && !$('menu-panel').hidden && !$('modal').classList.contains('open')) {
-      e.preventDefault();
-      closeMenu();
-      return;
-    }
     if (!$('modal').classList.contains('open')) return;
     const editing = $('editor').classList.contains('active');
     if (e.key === 'Escape') {

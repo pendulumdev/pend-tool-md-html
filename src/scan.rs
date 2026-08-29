@@ -13,6 +13,9 @@ use walkdir::WalkDir;
 use crate::config::{Config, ResolvedRoot};
 use crate::error::{MdHtmlError, Result};
 
+/// Bytes read from each file for tile summary and map links.
+const META_READ_BYTES: usize = 12_288;
+
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum FileKind {
@@ -49,11 +52,31 @@ pub struct RevisionResponse {
 }
 
 pub fn scan(config: &Config) -> Result<TreeResponse> {
+    scan_with(config, config.max_indexed_files, config.max_walk_entries)
+}
+
+fn scan_with(config: &Config, max_files: usize, max_walk: usize) -> Result<TreeResponse> {
     let exclude = build_exclude_set(&config.exclude)?;
     let mut files = Vec::new();
+    let mut walked = 0usize;
 
     for root in &config.roots {
-        scan_root(root, config.include_html_sites, &exclude, &mut files)?;
+        for_each_indexed_path(
+            root,
+            config.include_html_sites,
+            &exclude,
+            max_walk,
+            &mut walked,
+            |_, _, rel| {
+                if files.len() >= max_files {
+                    return Err(MdHtmlError::TooManyFiles { max: max_files });
+                }
+                if let Some(fe) = classify(root, rel, config.include_html_sites) {
+                    files.push(fe);
+                }
+                Ok(())
+            },
+        )?;
     }
 
     // Preserve [[roots]] declaration order; sort within each root by dir/name.
@@ -64,8 +87,14 @@ pub fn scan(config: &Config) -> Result<TreeResponse> {
         .map(|(i, r)| (r.label.as_str(), i))
         .collect();
     files.sort_by(|a, b| {
-        let ai = root_order.get(a.root.as_str()).copied().unwrap_or(usize::MAX);
-        let bi = root_order.get(b.root.as_str()).copied().unwrap_or(usize::MAX);
+        let ai = root_order
+            .get(a.root.as_str())
+            .copied()
+            .unwrap_or(usize::MAX);
+        let bi = root_order
+            .get(b.root.as_str())
+            .copied()
+            .unwrap_or(usize::MAX);
         ai.cmp(&bi)
             .then(a.dir.cmp(&b.dir))
             .then(a.name.cmp(&b.name))
@@ -75,25 +104,37 @@ pub fn scan(config: &Config) -> Result<TreeResponse> {
 }
 
 pub fn revision(config: &Config) -> Result<RevisionResponse> {
+    revision_with(config, config.max_walk_entries)
+}
+
+fn revision_with(config: &Config, max_walk: usize) -> Result<RevisionResponse> {
     let exclude = build_exclude_set(&config.exclude)?;
     let mut hasher = DefaultHasher::new();
     let mut count = 0u64;
+    let mut walked = 0usize;
 
     for root in &config.roots {
-        for_each_indexed_path(root, config.include_html_sites, &exclude, |abs, label, rel| {
-            label.hash(&mut hasher);
-            rel.hash(&mut hasher);
-            if let Ok(meta) = fs::metadata(abs) {
-                meta.len().hash(&mut hasher);
-                if let Ok(modified) = meta.modified() {
-                    if let Ok(dur) = modified.duration_since(UNIX_EPOCH) {
-                        dur.as_millis().hash(&mut hasher);
+        for_each_indexed_path(
+            root,
+            config.include_html_sites,
+            &exclude,
+            max_walk,
+            &mut walked,
+            |abs, label, rel| {
+                label.hash(&mut hasher);
+                rel.hash(&mut hasher);
+                if let Ok(meta) = fs::metadata(abs) {
+                    meta.len().hash(&mut hasher);
+                    if let Ok(modified) = meta.modified() {
+                        if let Ok(dur) = modified.duration_since(UNIX_EPOCH) {
+                            dur.as_millis().hash(&mut hasher);
+                        }
                     }
                 }
-            }
-            count += 1;
-            Ok(())
-        })?;
+                count += 1;
+                Ok(())
+            },
+        )?;
     }
     count.hash(&mut hasher);
 
@@ -102,10 +143,20 @@ pub fn revision(config: &Config) -> Result<RevisionResponse> {
     })
 }
 
+fn bump_walk(walked: &mut usize, max_walk: usize) -> Result<()> {
+    *walked += 1;
+    if *walked > max_walk {
+        return Err(MdHtmlError::WalkLimit { max: max_walk });
+    }
+    Ok(())
+}
+
 fn for_each_indexed_path(
     root: &ResolvedRoot,
     include_html: bool,
     exclude: &GlobSet,
+    max_walk: usize,
+    walked: &mut usize,
     mut visit: impl FnMut(&Path, &str, &str) -> Result<()>,
 ) -> Result<()> {
     if !root.recursive {
@@ -118,6 +169,7 @@ fn for_each_indexed_path(
                 path: root.abs_path.clone(),
                 source,
             })?;
+            bump_walk(walked, max_walk)?;
             let name = ent.file_name();
             let name = name.to_string_lossy();
             if name.starts_with('.') {
@@ -142,13 +194,11 @@ fn for_each_indexed_path(
     let walker = WalkDir::new(&root.abs_path)
         .follow_links(false)
         .into_iter()
-        .filter_entry(|e| {
-            let name = e.file_name().to_string_lossy();
-            !name.starts_with('.')
-        });
+        .filter_entry(|e| keep_walk_entry(e, &root.abs_path, &root.rel_path, exclude));
 
     for entry in walker {
         let entry = entry.map_err(|e| MdHtmlError::Server(e.to_string()))?;
+        bump_walk(walked, max_walk)?;
         if !entry.file_type().is_file() {
             continue;
         }
@@ -172,6 +222,29 @@ fn for_each_indexed_path(
     Ok(())
 }
 
+fn keep_walk_entry(
+    entry: &walkdir::DirEntry,
+    root_abs: &Path,
+    root_rel: &str,
+    exclude: &GlobSet,
+) -> bool {
+    let name = entry.file_name().to_string_lossy();
+    if name.starts_with('.') {
+        return false;
+    }
+    if !entry.file_type().is_dir() {
+        return true;
+    }
+    let Ok(rel) = entry.path().strip_prefix(root_abs) else {
+        return true;
+    };
+    let rel_str = path_to_slash(rel);
+    if rel_str.is_empty() {
+        return true;
+    }
+    !dir_is_excluded(exclude, root_rel, &rel_str)
+}
+
 fn build_exclude_set(patterns: &[String]) -> Result<GlobSet> {
     let mut builder = GlobSetBuilder::new();
     for p in patterns {
@@ -184,88 +257,6 @@ fn build_exclude_set(patterns: &[String]) -> Result<GlobSet> {
         .map_err(|e| MdHtmlError::Config(format!("exclude set: {e}")))
 }
 
-fn scan_root(
-    root: &ResolvedRoot,
-    include_html: bool,
-    exclude: &GlobSet,
-    out: &mut Vec<FileEntry>,
-) -> Result<()> {
-    if !root.recursive {
-        scan_flat(root, include_html, exclude, out)?;
-        return Ok(());
-    }
-
-    let walker = WalkDir::new(&root.abs_path)
-        .follow_links(false)
-        .into_iter()
-        .filter_entry(|e| {
-            let name = e.file_name().to_string_lossy();
-            if name.starts_with('.') {
-                return false;
-            }
-            true
-        });
-
-    for entry in walker {
-        let entry = entry.map_err(|e| MdHtmlError::Server(e.to_string()))?;
-        if !entry.file_type().is_file() {
-            continue;
-        }
-        let abs = entry.path();
-        let rel = match abs.strip_prefix(&root.abs_path) {
-            Ok(r) => r,
-            Err(_) => continue,
-        };
-        let rel_str = path_to_slash(rel);
-        if rel_str.is_empty() {
-            continue;
-        }
-        if is_excluded(exclude, &root.rel_path, &rel_str) {
-            continue;
-        }
-        if let Some(fe) = classify(root, &rel_str, include_html) {
-            out.push(fe);
-        }
-    }
-    Ok(())
-}
-
-fn scan_flat(
-    root: &ResolvedRoot,
-    include_html: bool,
-    exclude: &GlobSet,
-    out: &mut Vec<FileEntry>,
-) -> Result<()> {
-    let rd = fs::read_dir(&root.abs_path).map_err(|source| MdHtmlError::Io {
-        path: root.abs_path.clone(),
-        source,
-    })?;
-    for ent in rd {
-        let ent = ent.map_err(|source| MdHtmlError::Io {
-            path: root.abs_path.clone(),
-            source,
-        })?;
-        let name = ent.file_name();
-        let name = name.to_string_lossy();
-        if name.starts_with('.') {
-            continue;
-        }
-        let path = ent.path();
-        if !path.is_file() {
-            continue;
-        }
-        let rel_str = name.to_string();
-        if is_excluded(exclude, &root.rel_path, &rel_str) {
-            continue;
-        }
-        if let Some(fe) = classify(root, &rel_str, include_html) {
-            // For flat root ".", skip listing a nested index.html at top (none expected).
-            out.push(fe);
-        }
-    }
-    Ok(())
-}
-
 fn is_excluded(exclude: &GlobSet, root_rel: &str, file_rel: &str) -> bool {
     // Match against project-relative path and root-relative path.
     let project_rel = if root_rel == "." {
@@ -274,6 +265,11 @@ fn is_excluded(exclude: &GlobSet, root_rel: &str, file_rel: &str) -> bool {
         format!("{root_rel}/{file_rel}")
     };
     exclude.is_match(&project_rel) || exclude.is_match(file_rel)
+}
+
+/// True when every child of this directory would match `exclude` (e.g. `node_modules`).
+fn dir_is_excluded(exclude: &GlobSet, root_rel: &str, dir_rel: &str) -> bool {
+    is_excluded(exclude, root_rel, &format!("{dir_rel}/x"))
 }
 
 fn classify_kind(rel_str: &str, include_html: bool) -> Option<FileKind> {
@@ -341,7 +337,7 @@ fn read_meta(path: &PathBuf, kind: &FileKind, project_path: &str) -> (String, Ve
         return (String::new(), Vec::new());
     };
     use std::io::Read;
-    let mut buf = vec![0u8; 12288];
+    let mut buf = vec![0u8; META_READ_BYTES];
     let mut handle = file;
     let n = handle.read(&mut buf).unwrap_or(0);
     let text = String::from_utf8_lossy(&buf[..n]);
@@ -378,9 +374,7 @@ pub fn extract_md_links(text: &str, from_project_path: &str) -> Vec<String> {
             continue;
         }
         let rest = &text[after + 1..];
-        let end = rest
-            .find([')', '"', '\'', ' ', '\n'])
-            .unwrap_or(rest.len());
+        let end = rest.find([')', '"', '\'', ' ', '\n']).unwrap_or(rest.len());
         let raw = rest[..end].trim();
         i = after + 1 + end;
         if let Some(resolved) = resolve_md_href(from_project_path, raw) {
@@ -702,7 +696,10 @@ fn is_list_item(line: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::config::{default_exclude, Config, ConfigFile, RootConfig};
+    use crate::config::{
+        default_exclude, Config, ConfigFile, RootConfig, DEFAULT_MAX_FILE_BYTES,
+        DEFAULT_MAX_INDEXED_FILES, DEFAULT_MAX_WALK_ENTRIES,
+    };
     use tempfile::tempdir;
 
     #[test]
@@ -734,6 +731,9 @@ mod tests {
                 }],
                 exclude: default_exclude(),
                 include_html_sites: false,
+                max_indexed_files: DEFAULT_MAX_INDEXED_FILES,
+                max_walk_entries: DEFAULT_MAX_WALK_ENTRIES,
+                max_file_bytes: DEFAULT_MAX_FILE_BYTES,
             },
             dir.path(),
         )
@@ -741,29 +741,32 @@ mod tests {
 
         let r1 = revision(&cfg).unwrap().revision;
         // Length change alone must bust the fingerprint (mtime can be coarse).
-        fs::write(&md, "# A\n\nSecond summary text here — longer.\n").unwrap();
+        fs::write(&md, "# A\n\nSecond summary text here - longer.\n").unwrap();
         let r2 = revision(&cfg).unwrap().revision;
         assert_ne!(r1, r2, "revision should change after edit");
     }
 
     #[test]
     fn summary_preserves_unicode_dashes_and_arrows() {
+        // Escapes so the source file stays ASCII-hyphen-only; user markdown
+        // may still contain U+2014 / U+2192 and those must survive the scan.
         let s = extract_md_summary(
-            "# 13 — Migrations\n\n## Purpose\n\nDefine migration with a high success rate — minimal data loss, staging → store.\n",
+            "# 13 \u{2014} Migrations\n\n## Purpose\n\nDefine migration with a high success rate \u{2014} minimal data loss, staging \u{2192} store.\n",
         );
         assert!(
-            s.contains('—'),
+            s.contains('\u{2014}'),
             "em dash must survive clean_inline, got: {s:?}"
         );
-        assert!(s.contains('→'), "arrow must survive clean_inline, got: {s:?}");
+        assert!(
+            s.contains('→'),
+            "arrow must survive clean_inline, got: {s:?}"
+        );
         assert!(!s.contains('â'), "must not mojibake UTF-8, got: {s:?}");
     }
 
     #[test]
     fn split_row_respects_escaped_pipes() {
-        let cells = split_row(
-            "| database | `corten db migrate\\|status\\|reset` | wraps runner |",
-        );
+        let cells = split_row("| database | `corten db migrate\\|status\\|reset` | wraps runner |");
         assert_eq!(cells.len(), 3, "cells={cells:?}");
         assert_eq!(cells[0], "database");
         assert_eq!(cells[1], "`corten db migrate|status|reset`");
@@ -823,6 +826,9 @@ See [sibling](./other.md), [up](../spec/01.md#sec), [abs](/docs/a.md),
                 ],
                 exclude: default_exclude(),
                 include_html_sites: false,
+                max_indexed_files: DEFAULT_MAX_INDEXED_FILES,
+                max_walk_entries: DEFAULT_MAX_WALK_ENTRIES,
+                max_file_bytes: DEFAULT_MAX_FILE_BYTES,
             },
             dir.path(),
         )
@@ -864,6 +870,9 @@ See [sibling](./other.md), [up](../spec/01.md#sec), [abs](/docs/a.md),
                 }],
                 exclude: default_exclude(),
                 include_html_sites: false,
+                max_indexed_files: DEFAULT_MAX_INDEXED_FILES,
+                max_walk_entries: DEFAULT_MAX_WALK_ENTRIES,
+                max_file_bytes: DEFAULT_MAX_FILE_BYTES,
             },
             dir.path(),
         )
@@ -899,6 +908,9 @@ See [sibling](./other.md), [up](../spec/01.md#sec), [abs](/docs/a.md),
                 }],
                 exclude: vec!["**/target/**".into()],
                 include_html_sites: false,
+                max_indexed_files: DEFAULT_MAX_INDEXED_FILES,
+                max_walk_entries: DEFAULT_MAX_WALK_ENTRIES,
+                max_file_bytes: DEFAULT_MAX_FILE_BYTES,
             },
             dir.path(),
         )
@@ -907,5 +919,108 @@ See [sibling](./other.md), [up](../spec/01.md#sec), [abs](/docs/a.md),
         let tree = scan(&cfg).unwrap();
         assert_eq!(tree.files.len(), 1);
         assert_eq!(tree.files[0].path, "ok.md");
+    }
+
+    fn docs_cfg(dir: &std::path::Path, exclude: Vec<String>) -> Config {
+        Config::from_file(
+            ConfigFile {
+                title: "T".into(),
+                description: "D".into(),
+                port: 4173,
+                bind: "127.0.0.1".into(),
+                writable: false,
+                open_browser: false,
+                roots: vec![RootConfig {
+                    path: "docs".into(),
+                    label: "Docs".into(),
+                    recursive: true,
+                }],
+                exclude,
+                include_html_sites: false,
+                max_indexed_files: DEFAULT_MAX_INDEXED_FILES,
+                max_walk_entries: DEFAULT_MAX_WALK_ENTRIES,
+                max_file_bytes: DEFAULT_MAX_FILE_BYTES,
+            },
+            dir,
+        )
+        .unwrap()
+    }
+
+    #[test]
+    fn scan_fails_closed_at_indexed_file_limit() {
+        let dir = tempdir().unwrap();
+        let docs = dir.path().join("docs");
+        fs::create_dir_all(&docs).unwrap();
+        for name in ["a.md", "b.md", "c.md"] {
+            fs::write(docs.join(name), "# T\n\nUseful summary text here.\n").unwrap();
+        }
+        let cfg = docs_cfg(dir.path(), default_exclude());
+
+        let err = scan_with(&cfg, 2, 1_000).unwrap_err();
+        assert!(matches!(err, MdHtmlError::TooManyFiles { max: 2 }));
+
+        let tree = scan_with(&cfg, 3, 1_000).unwrap();
+        assert_eq!(tree.files.len(), 3);
+    }
+
+    #[test]
+    fn scan_fails_closed_at_walk_limit() {
+        let dir = tempdir().unwrap();
+        let docs = dir.path().join("docs");
+        fs::create_dir_all(&docs).unwrap();
+        fs::write(docs.join("ok.md"), "# T\n\nUseful summary text here.\n").unwrap();
+        for i in 0..8 {
+            fs::write(docs.join(format!("noise-{i}.txt")), "x").unwrap();
+        }
+        let cfg = docs_cfg(dir.path(), default_exclude());
+
+        let err = scan_with(&cfg, 10, 5).unwrap_err();
+        assert!(matches!(err, MdHtmlError::WalkLimit { max: 5 }));
+    }
+
+    #[test]
+    fn scan_does_not_walk_excluded_directories() {
+        let dir = tempdir().unwrap();
+        let docs = dir.path().join("docs");
+        let vendor = docs.join("node_modules");
+        fs::create_dir_all(&vendor).unwrap();
+        fs::write(docs.join("ok.md"), "# T\n\nUseful summary text here.\n").unwrap();
+        for i in 0..20 {
+            fs::write(vendor.join(format!("{i}.md")), "# V\n").unwrap();
+        }
+        let cfg = docs_cfg(dir.path(), vec!["**/node_modules/**".into()]);
+
+        // Root dir + ok.md stays under a small walk budget; descending into
+        // node_modules would blow it.
+        let tree = scan_with(&cfg, 10, 8).unwrap();
+        assert_eq!(tree.files.len(), 1);
+        assert_eq!(tree.files[0].path, "ok.md");
+    }
+
+    #[test]
+    fn revision_fails_closed_at_walk_limit() {
+        let dir = tempdir().unwrap();
+        let docs = dir.path().join("docs");
+        fs::create_dir_all(&docs).unwrap();
+        for i in 0..8 {
+            fs::write(docs.join(format!("n-{i}.txt")), "x").unwrap();
+        }
+        let cfg = docs_cfg(dir.path(), default_exclude());
+        let err = revision_with(&cfg, 4).unwrap_err();
+        assert!(matches!(err, MdHtmlError::WalkLimit { max: 4 }));
+    }
+
+    #[test]
+    fn scan_honors_config_indexed_file_limit() {
+        let dir = tempdir().unwrap();
+        let docs = dir.path().join("docs");
+        fs::create_dir_all(&docs).unwrap();
+        for name in ["a.md", "b.md", "c.md"] {
+            fs::write(docs.join(name), "# T\n\nUseful summary text here.\n").unwrap();
+        }
+        let mut cfg = docs_cfg(dir.path(), default_exclude());
+        cfg.max_indexed_files = 2;
+        let err = scan(&cfg).unwrap_err();
+        assert!(matches!(err, MdHtmlError::TooManyFiles { max: 2 }));
     }
 }

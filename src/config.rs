@@ -1,16 +1,18 @@
 //! Typed `md-html.toml` load and validation.
+//! Turns toml file into a validated, path-resolved Config the process holds in memory.
 
 use std::fs;
 use std::net::IpAddr;
 use std::path::{Path, PathBuf};
 
+use crate::error::{MdHtmlError, Result};
 use serde::Deserialize;
 
-use crate::error::{MdHtmlError, Result};
-
 pub const CONFIG_FILE_NAME: &str = "md-html.toml";
-
 pub const DEFAULT_EXCLUDE: &[&str] = &["**/target/**", "**/.git/**", "**/node_modules/**"];
+pub const DEFAULT_MAX_INDEXED_FILES: usize = 4_000;
+pub const DEFAULT_MAX_WALK_ENTRIES: usize = 100_000;
+pub const DEFAULT_MAX_FILE_BYTES: u64 = 2 * 1024 * 1024;
 
 #[derive(Debug, Clone, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -30,6 +32,12 @@ pub struct ConfigFile {
     pub exclude: Vec<String>,
     #[serde(default = "default_true")]
     pub include_html_sites: bool,
+    #[serde(default = "default_max_indexed_files")]
+    pub max_indexed_files: usize,
+    #[serde(default = "default_max_walk_entries")]
+    pub max_walk_entries: usize,
+    #[serde(default = "default_max_file_bytes")]
+    pub max_file_bytes: u64,
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -54,6 +62,15 @@ fn default_true() -> bool {
 pub fn default_exclude() -> Vec<String> {
     DEFAULT_EXCLUDE.iter().map(|s| (*s).to_string()).collect()
 }
+fn default_max_indexed_files() -> usize {
+    DEFAULT_MAX_INDEXED_FILES
+}
+fn default_max_walk_entries() -> usize {
+    DEFAULT_MAX_WALK_ENTRIES
+}
+fn default_max_file_bytes() -> u64 {
+    DEFAULT_MAX_FILE_BYTES
+}
 
 /// Validated config plus absolute project root.
 #[derive(Debug, Clone)]
@@ -68,6 +85,9 @@ pub struct Config {
     pub roots: Vec<ResolvedRoot>,
     pub exclude: Vec<String>,
     pub include_html_sites: bool,
+    pub max_indexed_files: usize,
+    pub max_walk_entries: usize,
+    pub max_file_bytes: u64,
 }
 
 #[derive(Debug, Clone)]
@@ -109,6 +129,21 @@ impl Config {
         }
         if file.title.trim().is_empty() {
             return Err(MdHtmlError::Config("title must not be empty".into()));
+        }
+        if file.max_indexed_files == 0 {
+            return Err(MdHtmlError::Config(
+                "max_indexed_files must be greater than zero".into(),
+            ));
+        }
+        if file.max_walk_entries == 0 {
+            return Err(MdHtmlError::Config(
+                "max_walk_entries must be greater than zero".into(),
+            ));
+        }
+        if file.max_file_bytes == 0 {
+            return Err(MdHtmlError::Config(
+                "max_file_bytes must be greater than zero".into(),
+            ));
         }
 
         let bind_ip: IpAddr = file
@@ -180,6 +215,9 @@ impl Config {
             roots,
             exclude: file.exclude,
             include_html_sites: file.include_html_sites,
+            max_indexed_files: file.max_indexed_files,
+            max_walk_entries: file.max_walk_entries,
+            max_file_bytes: file.max_file_bytes,
         })
     }
 }
@@ -248,7 +286,7 @@ fn normalize_file_rel(raw: &str) -> Result<String> {
 
 pub fn default_init_toml() -> &'static str {
     r#"# md-html - local markdown browser
-# https://github.com/pendulumdev/md-html
+# https://github.com/pendulumdev/pend-tool-md-html
 
 title = "Documents"
 description = "Browsable index of project Markdown."
@@ -259,6 +297,11 @@ open_browser = true
 include_html_sites = true
 
 exclude = ["**/target/**", "**/.git/**", "**/node_modules/**"]
+
+# Optional scan caps (defaults shown). Raise only if you accept the memory cost.
+# max_indexed_files = 4000
+# max_walk_entries = 100000
+# max_file_bytes = 2097152
 
 [[roots]]
 path = "docs"
@@ -294,6 +337,9 @@ mod tests {
             }],
             exclude: default_exclude(),
             include_html_sites: false,
+            max_indexed_files: DEFAULT_MAX_INDEXED_FILES,
+            max_walk_entries: DEFAULT_MAX_WALK_ENTRIES,
+            max_file_bytes: DEFAULT_MAX_FILE_BYTES,
         };
         let err = Config::from_file(file, dir.path()).unwrap_err();
         assert!(matches!(err, MdHtmlError::NonLoopbackBind(_)));
@@ -328,6 +374,9 @@ mod tests {
                 }],
                 exclude: default_exclude(),
                 include_html_sites: false,
+                max_indexed_files: DEFAULT_MAX_INDEXED_FILES,
+                max_walk_entries: DEFAULT_MAX_WALK_ENTRIES,
+                max_file_bytes: DEFAULT_MAX_FILE_BYTES,
             },
             dir.path(),
         )
@@ -357,6 +406,9 @@ mod tests {
                 }],
                 exclude: default_exclude(),
                 include_html_sites: false,
+                max_indexed_files: DEFAULT_MAX_INDEXED_FILES,
+                max_walk_entries: DEFAULT_MAX_WALK_ENTRIES,
+                max_file_bytes: DEFAULT_MAX_FILE_BYTES,
             },
             dir.path(),
         )
@@ -392,10 +444,90 @@ mod tests {
                 ],
                 exclude: default_exclude(),
                 include_html_sites: false,
+                max_indexed_files: DEFAULT_MAX_INDEXED_FILES,
+                max_walk_entries: DEFAULT_MAX_WALK_ENTRIES,
+                max_file_bytes: DEFAULT_MAX_FILE_BYTES,
             },
             dir.path(),
         )
         .unwrap_err();
         assert!(matches!(err, MdHtmlError::DuplicateLabel(_)));
+    }
+
+    #[test]
+    fn scan_limit_keys_default_when_omitted() {
+        let dir = tempdir().unwrap();
+        fs::write(dir.path().join("README.md"), "x").unwrap();
+        let path = dir.path().join(CONFIG_FILE_NAME);
+        fs::write(
+            &path,
+            r#"
+title = "T"
+description = "D"
+[[roots]]
+path = "."
+label = "Root"
+recursive = false
+"#,
+        )
+        .unwrap();
+        let cfg = Config::load(&path).unwrap();
+        assert_eq!(cfg.max_indexed_files, DEFAULT_MAX_INDEXED_FILES);
+        assert_eq!(cfg.max_walk_entries, DEFAULT_MAX_WALK_ENTRIES);
+        assert_eq!(cfg.max_file_bytes, DEFAULT_MAX_FILE_BYTES);
+    }
+
+    #[test]
+    fn scan_limit_keys_can_be_overridden() {
+        let dir = tempdir().unwrap();
+        fs::write(dir.path().join("README.md"), "x").unwrap();
+        let path = dir.path().join(CONFIG_FILE_NAME);
+        fs::write(
+            &path,
+            r#"
+title = "T"
+description = "D"
+max_indexed_files = 10
+max_walk_entries = 20
+max_file_bytes = 30
+[[roots]]
+path = "."
+label = "Root"
+recursive = false
+"#,
+        )
+        .unwrap();
+        let cfg = Config::load(&path).unwrap();
+        assert_eq!(cfg.max_indexed_files, 10);
+        assert_eq!(cfg.max_walk_entries, 20);
+        assert_eq!(cfg.max_file_bytes, 30);
+    }
+
+    #[test]
+    fn scan_limit_keys_reject_zero() {
+        let dir = tempdir().unwrap();
+        let err = Config::from_file(
+            ConfigFile {
+                title: "T".into(),
+                description: "D".into(),
+                port: 4173,
+                bind: "127.0.0.1".into(),
+                writable: false,
+                open_browser: false,
+                roots: vec![RootConfig {
+                    path: ".".into(),
+                    label: "Root".into(),
+                    recursive: false,
+                }],
+                exclude: default_exclude(),
+                include_html_sites: false,
+                max_indexed_files: 0,
+                max_walk_entries: DEFAULT_MAX_WALK_ENTRIES,
+                max_file_bytes: DEFAULT_MAX_FILE_BYTES,
+            },
+            dir.path(),
+        )
+        .unwrap_err();
+        assert!(matches!(err, MdHtmlError::Config(_)));
     }
 }

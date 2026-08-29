@@ -1,4 +1,4 @@
-# Example `md-html.toml` — copy to a project root or run `md-html init`.
+# Example `md-html.toml` - copy to a project root or run `md-html init`.
 # Paths are relative to the directory that contains this file.
 
 title = "Example"
@@ -10,6 +10,11 @@ open_browser = true
 include_html_sites = true
 
 exclude = ["**/target/**", "**/.git/**", "**/node_modules/**"]
+
+# Optional scan caps (defaults shown). Raise only if you accept the memory cost.
+# max_indexed_files = 4000
+# max_walk_entries = 100000
+# max_file_bytes = 2097152
 
 [[roots]]
 path = "docs"
