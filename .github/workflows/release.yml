@@ -90,7 +90,7 @@ jobs:
           tar -C "$stage" -czf "$archive" md-html
           ls -l "$archive"
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: md-html-${{ matrix.target }}
           path: md-html-*.tar.gz
@@ -104,7 +104,7 @@ jobs:
         with:
           fetch-depth: 0
 
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@v8
         with:
           path: dist
           pattern: md-html-*
