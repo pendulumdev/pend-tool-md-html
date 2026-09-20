@@ -572,6 +572,139 @@
     }
     .modal-content pre.mermaid svg { max-width: 100%; height: auto; }
 
+    /*
+     * Print / Save as PDF.
+     * The reader is a fixed overlay with an overflow:auto body. Without this,
+     * browsers only paginate the visible scroll viewport (~1-2 pages).
+     */
+    @media print {
+      @page {
+        margin: 14mm 12mm;
+      }
+
+      html, body {
+        background: #fff !important;
+        color: #1a1a2e !important;
+        height: auto !important;
+        overflow: visible !important;
+        min-height: 0 !important;
+      }
+
+      .page,
+      .toast,
+      .modal-bar,
+      .editor,
+      #print-btn {
+        display: none !important;
+      }
+
+      .modal {
+        display: none;
+        position: static !important;
+        inset: auto !important;
+        background: transparent !important;
+        backdrop-filter: none !important;
+        -webkit-backdrop-filter: none !important;
+        z-index: auto !important;
+      }
+      .modal.open {
+        display: block !important;
+      }
+
+      .modal-body {
+        display: block !important;
+        overflow: visible !important;
+        height: auto !important;
+        max-height: none !important;
+        padding: 0 !important;
+        background: #fff !important;
+        flex: none !important;
+      }
+
+      .modal-content {
+        display: block !important;
+        max-width: none !important;
+        margin: 0 !important;
+        padding: 0 !important;
+        color: #1a1a2e !important;
+        font-size: 11pt;
+        line-height: 1.5;
+      }
+      .modal-content.editing { display: block !important; }
+
+      .modal-content a {
+        color: #1a1a2e !important;
+        text-decoration: underline;
+      }
+      .modal-content a[href^="http"]::after {
+        content: " (" attr(href) ")";
+        font-size: 0.85em;
+        color: #4a4d57;
+        word-break: break-all;
+      }
+      .modal-content a[href^="#"]::after,
+      .modal-content a[href^="mailto:"]::after,
+      .modal-content a:has(> img)::after {
+        content: none;
+      }
+
+      .modal-content h1,
+      .modal-content h2,
+      .modal-content h3,
+      .modal-content h4 {
+        color: #1a1a2e !important;
+        break-after: avoid;
+        page-break-after: avoid;
+      }
+      .modal-content h2 {
+        border-bottom-color: rgba(26, 26, 46, 0.2) !important;
+      }
+
+      .modal-content pre,
+      .modal-content blockquote,
+      .modal-content table,
+      .modal-content img,
+      .modal-content pre.mermaid {
+        break-inside: avoid;
+        page-break-inside: avoid;
+      }
+
+      .modal-content code,
+      .modal-content pre {
+        background: #f5f0e8 !important;
+        color: #1a1a2e !important;
+        border-color: rgba(26, 26, 46, 0.18) !important;
+      }
+      .modal-content pre {
+        overflow: visible !important;
+        white-space: pre-wrap;
+        word-break: break-word;
+      }
+      .modal-content th {
+        background: #ebe5d6 !important;
+      }
+      .modal-content th,
+      .modal-content td {
+        border-color: rgba(26, 26, 46, 0.22) !important;
+      }
+      .modal-content blockquote {
+        background: #fcf7ec !important;
+        color: #4a4d57 !important;
+        border-left-color: #1b4332 !important;
+      }
+      .modal-content hr {
+        border-top-color: rgba(26, 26, 46, 0.2) !important;
+      }
+
+      .modal-content pre.mermaid {
+        background: #fff !important;
+      }
+      .modal-content pre.mermaid svg {
+        max-width: 100% !important;
+        height: auto !important;
+      }
+    }
+
     /* ===== Compact header switches ===== */
     .switch {
       display: inline-grid;

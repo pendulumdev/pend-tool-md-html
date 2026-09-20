@@ -34,9 +34,10 @@ define markdown file roots (e.g. `spec/`, `docs/`), title, port, and excludes.
 config to any folder and run. No Node, no submodule, no generated assets.
 - **Browseable index** - noon or midnight UI (IBM Plex + parchment), tile
 summaries, filter search, list or swimlane map in the header, full-screen
-modal, browser history stack. Viewed/read marks persist in cookies; Reset
-clears them. Serve mode live-reloads when docs change (polls a cheap
-revision stamp; and checks when the tab regains focus).
+modal, browser history stack. Print / Save as PDF from the reader (Print
+button or ⌘/Ctrl+P). Viewed/read marks persist in cookies; Reset clears
+them. Serve mode live-reloads when docs change (polls a cheap revision
+stamp; and checks when the tab regains focus).
 - **Honest links** - relative `.md` links resolve across roots via
 project-relative paths; nested `index.html` sites open in a new tab.
 - **Safe by default** - loopback bind only; edit/save is opt-in (`writable`).

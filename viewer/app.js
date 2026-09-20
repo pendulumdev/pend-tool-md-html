@@ -734,6 +734,10 @@
   });
   $('reset-state').addEventListener('click', resetMarks);
   $('mark-read').addEventListener('click', () => toggleRead(state.current));
+  $('print-btn').addEventListener('click', () => {
+    if (!$('modal').classList.contains('open') || !state.current) return;
+    window.print();
+  });
   applyTheme(state.theme);
   document.querySelectorAll('[data-view]').forEach((btn) => {
     const on = btn.dataset.view === state.view;
@@ -807,6 +811,9 @@
     } else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'e' && !editing) {
       e.preventDefault();
       setView('edit');
+    } else if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'p' && !editing) {
+      e.preventDefault();
+      window.print();
     }
   });
 
